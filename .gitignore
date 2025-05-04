@@ -8,3 +8,4 @@ data/dairy
 data/paste
 data/instre
 baselines/CoAE/data
+data/VOCdevkit
