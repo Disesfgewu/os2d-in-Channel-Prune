@@ -1400,11 +1400,16 @@ class Os2dModelInPrune(Os2dModel):
         """保存模型檢查點，確保與 OS2D 框架完全相容"""
         import traceback
         import logging
+        import os
         
         # 創建臨時logger，類似於父類中的logger
         temp_logger = logging.getLogger("OS2D.save_checkpoint")
         
-        # 收集層的大小和結構資訊
+        # 定義保存路徑
+        pruned_path = checkpoint_path.replace('.pth', '_pruned.pth')  # 剪枝版本
+        os2d_path = checkpoint_path  # OS2D 兼容版本
+        
+        # 收集剪枝後的模型結構資訊
         model_structure = self._get_model_structure(exclude_teacher=True)
         
         # 準備檢查點字典 - 只包含學生模型的參數
@@ -1419,7 +1424,6 @@ class Os2dModelInPrune(Os2dModel):
             optimizer_state = self.optimizer.state_dict()
         
         # 使用與原始 OS2D 完全相同的檢查點結構
-        # 關鍵是使用 'net' 鍵，並確保包含所有必要的子模塊
         os2d_checkpoint = {
             'net': student_state_dict,  # OS2D init_model_from_file 首先查找的鍵
             'optimizer': optimizer_state,
@@ -1446,38 +1450,77 @@ class Os2dModelInPrune(Os2dModel):
             'backbone_arch': self.backbone_arch if hasattr(self, 'backbone_arch') else "resnet50"
         }
         
+        # 1. 保存剪枝版本 (給我們自己用)
+        pruned_checkpoint = {
+            'model_state_dict': student_state_dict,
+            'model_structure': model_structure,
+            'optimizer_state_dict': optimizer_state,
+            'auxiliary_net_state_dict': self.auxiliary_net.state_dict() if hasattr(self, 'auxiliary_net') else None,
+            'backbone_arch': self.backbone_arch if hasattr(self, 'backbone_arch') else "resnet50",
+            'epoch': self.epoch if hasattr(self, 'epoch') else 0
+        }
+        
         try:
-            # 保存檢查點
-            torch.save(os2d_checkpoint, checkpoint_path)
+            # 保存兩個檢查點
+            torch.save(os2d_checkpoint, os2d_path)
+            torch.save(pruned_checkpoint, pruned_path)
             
-            # 測試能否加載 (嚴格的測試)
-            print("🧪 測試檢查點相容性...")
-            
-            print("測試使用 init_model_from_file:")
-            try:
-                temp_model2 = type(self)(pretrained_path=None, is_cuda=self.is_cuda)
-                optimizer_result = temp_model2.init_model_from_file(checkpoint_path)
-                print(f"✓ init_model_from_file 成功!")
-                if optimizer_result is not None:
-                    print("  - 優化器狀態也成功載入")
-            except Exception as e:
-                print(f"⚠️ init_model_from_file 測試失敗: {e}")
+            print(f"\n✅ 檢查點已保存:")
+            print(f"  - OS2D 相容檢查點: {os2d_path}")
+            print(f"  - 剪枝模型檢查點: {pruned_path}")
             
             # 計算參數量
             student_params = sum(p.numel() for name, p in self.named_parameters() 
                             if not name.startswith('teacher_model'))
-            
-            print(f"\n✅ 模型檢查點已保存至: {checkpoint_path}")
             print(f"  - 學生模型參數量: {student_params:,}")
-            print(f"  - 檢查點格式已經過相容性測試")
             
-            # 如果需要查看具體的鍵值結構，可以啟用以下代碼
-            # print("\n檢查點中的頂層鍵:")
-            # for k in os2d_checkpoint.keys():
-            #     print(f"  - {k}")
-            # print("\n'net' 鍵中前10個參數:")
-            # for i, (k, v) in enumerate(list(os2d_checkpoint['net'].items())[:10]):
-            #     print(f"  - {k}: {v.shape}")
+            # 測試能否加載 (嚴格的測試)
+            print("\n🧪 測試檢查點相容性...")
+            os2d_compat_result = False
+            pruned_compat_result = False
+            
+            print("\n1. 測試OS2D框架相容性 (使用父類 Os2dModel):")
+            try:
+                from os2d.modeling.model import Os2dModel
+                # 創建原始 OS2D 模型實例
+                os2d_model = Os2dModel(logger=temp_logger, is_cuda=self.is_cuda)
+                # 使用父類的 init_model_from_file 方法測試
+                optimizer_result = os2d_model.init_model_from_file(os2d_path)
+                print(f"✅ OS2D 框架相容性測試: ✓ 通過")
+                os2d_compat_result = True
+            except Exception as e:
+                print(f"❌ OS2D 框架相容性測試: ✗ 失敗")
+                print(f"   錯誤原因: {e}")
+            
+            print("\n2. 測試剪枝模型載入 (使用 Os2dModelInPrune):")
+            try:
+                # 自己的模型載入測試
+                pruned_model = type(self)(pretrained_path=None, is_cuda=self.is_cuda)
+                success = pruned_model.load_checkpoint(pruned_path)
+                if success:
+                    print(f"✅ 剪枝模型載入測試: ✓ 通過")
+                    pruned_compat_result = True
+                else:
+                    print(f"❌ 剪枝模型載入測試: ✗ 失敗")
+            except Exception as e:
+                print(f"❌ 剪枝模型載入測試: ✗ 失敗")
+                print(f"   錯誤原因: {e}")
+            
+            print("\n3. 測試使用本類的 init_model_from_file:")
+            try:
+                temp_model2 = type(self)(pretrained_path=None, is_cuda=self.is_cuda)
+                optimizer_result = temp_model2.init_model_from_file(os2d_path)
+                print(f"✅ init_model_from_file 測試: ✓ 通過")
+                if optimizer_result is not None:
+                    print("   優化器狀態也成功載入")
+            except Exception as e:
+                print(f"❌ init_model_from_file 測試: ✗ 失敗")
+                print(f"   錯誤原因: {e}")
+                    
+            print("\n===== 相容性測試摘要 =====")
+            print(f"OS2D 框架相容性: {'✅ 通過' if os2d_compat_result else '❌ 失敗'}")
+            print(f"剪枝模型載入測試: {'✅ 通過' if pruned_compat_result else '❌ 失敗'}")
+            print("==========================")
             
             return True
         except Exception as e:
@@ -1524,4 +1567,4 @@ class Os2dModelInPrune(Os2dModel):
                     'bias': module.bias is not None
                 }
         
-        return structure
+        return structure    

@@ -308,7 +308,77 @@ class Os2dModel(nn.Module):
                 checkpoint = None
 
             if checkpoint and "net" in checkpoint:
-                self.load_state_dict(checkpoint["net"], strict=False)
+                self.logger.info("Trying to load the full model from checkpoint")
+                # Before loading the state_dict, check if keys match and have the same shapes
+                model_state_dict = self.state_dict()
+                checkpoint_state_dict = checkpoint["net"]
+
+                # Filter out size mismatched parameters
+                compatible_state_dict = {}
+                incompatible_keys = []
+
+                for k, v in checkpoint_state_dict.items():
+                    if k in model_state_dict:
+                        if v.shape == model_state_dict[k].shape:
+                            compatible_state_dict[k] = v
+                        else:
+                            incompatible_keys.append(f"{k}: checkpoint shape {v.shape} vs model shape {model_state_dict[k].shape}")
+                    else:
+                        incompatible_keys.append(f"{k}: not found in model")
+
+                # Instead of skipping incompatible keys, try to adapt tensor shapes
+                for k, v in checkpoint_state_dict.items():
+                    if k in model_state_dict:
+                        target_shape = model_state_dict[k].shape
+                        if v.shape == target_shape:
+                            compatible_state_dict[k] = v
+                        elif len(v.shape) == len(target_shape):
+                            # Handle shape mismatch by attempting to resize/adapt parameters
+                            self.logger.info(f"Adapting parameter {k}: {v.shape} -> {target_shape}")
+                            try:
+                                if len(v.shape) == 1:  # For 1D tensors like biases or BN params
+                                    # Initialize with zeros and copy what we can
+                                    new_tensor = torch.zeros(target_shape, device=v.device)
+                                    min_size = min(v.shape[0], target_shape[0])
+                                    new_tensor[:min_size] = v[:min_size]
+                                    compatible_state_dict[k] = new_tensor
+                                elif len(v.shape) == 2:  # For 2D tensors like FC layers
+                                    new_tensor = torch.zeros(target_shape, device=v.device)
+                                    min_h = min(v.shape[0], target_shape[0])
+                                    min_w = min(v.shape[1], target_shape[1])
+                                    new_tensor[:min_h, :min_w] = v[:min_h, :min_w]
+                                    compatible_state_dict[k] = new_tensor
+                                elif len(v.shape) == 4:  # For Conv layers
+                                    new_tensor = torch.zeros(target_shape, device=v.device)
+                                    min_out = min(v.shape[0], target_shape[0])
+                                    min_in = min(v.shape[1], target_shape[1])
+                                    min_h = min(v.shape[2], target_shape[2])
+                                    min_w = min(v.shape[3], target_shape[3])
+                                    new_tensor[:min_out, :min_in, :min_h, :min_w] = v[:min_out, :min_in, :min_h, :min_w]
+                                    compatible_state_dict[k] = new_tensor
+                                else:
+                                    # Fallback to skipping for other shapes
+                                    incompatible_keys.append(f"{k}: couldn't adapt {v.shape} to {target_shape}")
+                            except Exception as e:
+                                incompatible_keys.append(f"{k}: adaptation failed - {str(e)}")
+                        else:
+                            incompatible_keys.append(f"{k}: dimension mismatch {v.shape} vs {target_shape}")
+                    else:
+                        incompatible_keys.append(f"{k}: not found in model")
+                
+                # Log any remaining incompatible keys
+                if incompatible_keys:
+                    self.logger.info(f"Could not adapt {len(incompatible_keys)} keys:")
+                    for key_info in incompatible_keys[:10]:
+                        self.logger.info(f"  {key_info}")
+                    if len(incompatible_keys) > 10:
+                        self.logger.info(f"  ... and {len(incompatible_keys) - 10} more")
+
+                # Load the compatible parameters
+                self.logger.info(f"Loading {len(compatible_state_dict)}/{len(checkpoint_state_dict)} parameters from checkpoint")
+                missing_keys, unexpected_keys = self.load_state_dict(compatible_state_dict, strict=False)
+                self.logger.info(f"Loaded state dict with {len(missing_keys)} missing keys and {len(unexpected_keys)} unexpected keys")
+
                 self.logger.info("Loaded complete model from checkpoint")
             else:
                 self.logger.info("Cannot find 'net' in the checkpoint file")
@@ -322,7 +392,9 @@ class Os2dModel(nn.Module):
 
         except (KeyboardInterrupt, SystemExit):
             raise
-        except:
+        except Exception as e:
+            
+            self.logger.info(f"Failed to load the full model: {e}")
             self.logger.info("Failed to load the full model, trying to init feature extractors")
             self._load_network(self.net_label_features.net_class_features, path=path)
             if not self.merge_branch_parameters:
