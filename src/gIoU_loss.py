@@ -9,7 +9,7 @@ VOC_CLASSES = [
 class GIoULoss(nn.Module):
     """GIoU 損失，用於邊界框回歸 (論文 3.2 節)"""
     def __init__(self, eps=1e-6):
-        super(GIoULoss, self).__init__()
+        super().__init__()
         self.eps = eps
     
     def forward(self, pred_boxes, target_boxes):

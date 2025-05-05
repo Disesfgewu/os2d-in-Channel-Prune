@@ -3,14 +3,94 @@ import torch
 import torchvision
 import pytest
 import traceback
+import numpy as np
+import unittest
+from torch.utils.data import DataLoader
+from unittest.mock import MagicMock, patch
 from src.lcp_channel_selector import OS2DChannelSelector
 from src.contextual_roi_align import ContextualRoIAlign
-from src.os2d_model_in_prune import Os2dModelInPrune
 from src.auxiliary_network import AuxiliaryNetwork
+from src.os2d_model_in_prune import Os2dModelInPrune
+from src.dataset_downloader import VOCDataset , VOC_CLASSES
+
 import logging
+def test_init_and_len():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True)
+    assert len(dataset) > 0
+    assert isinstance(dataset.CLASSES, list)
+    print("初始化與長度測試通過")
+    return True
+
+def test_getitem_single():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True)
+    img, boxes, labels, class_images = dataset[0]
+    assert isinstance(img, torch.Tensor) and img.dim() == 3  # [C, H, W]
+    assert isinstance(boxes, torch.Tensor) and boxes.shape[1] == 4
+    assert isinstance(labels, torch.Tensor)
+    assert isinstance(class_images, torch.Tensor)
+    # class_images: [N, C, H, W] or [1, C, H, W]
+    assert class_images.dim() == 4
+    assert class_images.shape[2:] == (64, 64)
+    print("getitem 單一樣本測試通過")
+    return True
+
+def test_collate_fn_batch():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True)
+    batch = [dataset[i] for i in range(4)]
+    result = VOCDataset.collate_fn(batch)
+    images, boxes_list, labels_list, all_class_images = result
+    assert isinstance(images, torch.Tensor) and images.dim() == 4  # [B, C, H, W]
+    assert len(boxes_list) == 4
+    assert len(labels_list) == 4
+    assert isinstance(all_class_images, torch.Tensor)
+    # all_class_images: [sum_N, C, H, W]
+    assert all_class_images.shape[1:] == (3, 64, 64)
+    print("collate_fn 批次測試通過")
+    return True
+
+def test_collate_fn_batch():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True)
+    batch = [dataset[i] for i in range(4)]
+    result = VOCDataset.collate_fn(batch)
+    images, boxes_list, labels_list, all_class_images = result
+    assert isinstance(images, torch.Tensor) and images.dim() == 4  # [B, C, H, W]
+    assert len(boxes_list) == 4
+    assert len(labels_list) == 4
+    assert isinstance(all_class_images, torch.Tensor)
+    # all_class_images: [sum_N, C, H, W]
+    assert all_class_images.shape[1:] == (3, 64, 64)
+    print("collate_fn 批次測試通過")
+    return True
+
+def test_class_image_generation():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True)
+    for i in range(10):
+        img, boxes, labels, class_images = dataset[i]
+        assert class_images.dim() == 4
+        # 至少有一個 class image
+        assert class_images.shape[0] >= 1
+        assert class_images.shape[1:] == (3, 64, 64)
+    print("class image 自動產生測試通過")
+    return True
+
+def test_img_size_resize():
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True, img_size=(128, 128))
+    img, boxes, labels, class_images = dataset[0]
+    assert img.shape[1:] == (128, 128)
+    print("img_size resize 測試通過")
+    return True
+
+def test_class_mapping():
+    mapping = {i: (i+1)%20 for i in range(20)}
+    dataset = VOCDataset(data_path="./VOCdevkit", split="train", download=True, class_mapping=mapping)
+    _, _, labels, _ = dataset[0]
+    for l in labels:
+        assert l in mapping.values()
+    print("class_mapping 功能測試通過")
+    return True
 
 def test_os2d_model_in_prune_initialization():
-    """測試 Os2dModelInPrune 初始化"""
+    """測試 Os2dModelInPrune 初始化，並區分學生模型與教師模型參數量"""
     # 設置 logger
     logger = logging.getLogger("OS2D.test")
     
@@ -27,10 +107,34 @@ def test_os2d_model_in_prune_initialization():
     assert hasattr(model, 'net_label_features'), "模型應該有 net_label_features 屬性"
     assert hasattr(model, 'os2d_head_creator'), "模型應該有 os2d_head_creator 屬性"
     
-    # 驗證參數數量
-    param_count = sum(p.numel() for p in model.parameters())
-    print(f"模型參數總數: {param_count}")
-    assert param_count > 0, "模型參數數量應該大於 0"
+    # 分開計算學生模型和教師模型的參數數量
+    student_params = 0
+    teacher_params = 0
+    
+    for name, param in model.named_parameters():
+        if name.startswith('teacher_model'):
+            teacher_params += param.numel()
+        else:
+            student_params += param.numel()
+    
+    total_params = student_params + teacher_params
+    
+    # 輸出各部分參數量
+    print(f"模型總參數量: {total_params:,}")
+    print(f"  - 學生模型參數量: {student_params:,}")
+    print(f"  - 教師模型參數量: {teacher_params:,}")
+    
+    # 如果存在教師模型，則驗證學生和教師模型的參數量是否接近
+    if teacher_params > 0:
+        param_diff_ratio = abs(student_params - teacher_params) / max(student_params, teacher_params)
+        print(f"  - 學生/教師模型參數量差異比例: {param_diff_ratio:.4f}")
+        assert param_diff_ratio < 0.05, "學生模型與教師模型參數量差異過大，應該非常接近"
+    
+    # 確保總參數量大於0
+    assert total_params > 0, "模型參數數量應該大於 0"
+    
+    # 如果只需要查看學生模型參數量，可以取消下面的註釋
+    # print(f"純學生模型參數量: {student_params:,}")
     
     print("✅ Os2dModelInPrune 初始化測試通過")
     return True
@@ -1704,6 +1808,7 @@ def test_channel_importance_computation():
         print(f"❌ 通道重要性計算測試失敗: {e}")
         # traceback.print_exc()
         return False
+    
 def test_lcp_finetune_pipeline():
     """測試 LCP 微調剪枝 pipeline"""
     try:
@@ -2100,20 +2205,450 @@ def test_feature_map_extraction():
         print(f"❌ 特徵圖提取測試發生錯誤: {e}")
         traceback.print_exc()
         return False
-if __name__ == "__main__":
-    test_os2d_model_in_prune_initialization()
-    test_os2d_model_in_prune_forward()
-    test_forward_pass_with_class_images()
-    test_set_layer_out_channels() 
-    test_os2d_model_in_prune_channel()
-    test_continuous_blocks_pruning()
-    test_prune_conv1_only()
-    test_prune_conv2_only()
-    test_prune_conv3_only()
-    test_continuous_block_pruning()
-    test_prune_multiple_blocks()
-    test_cross_stage_prune()
-    test_resnet18_basicblock_prune()
-    test_pruning_ratios("layer2.0.conv1")
-    test_lcp_channel_selector()
-    test_channel_importance_computation()
+
+def test_train_one_epoch_basic():
+    """測試 train_one_epoch 的基本功能"""
+    try:
+        # 設置設備
+        import torch
+        import os
+        import numpy as np
+        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        print(f"使用設備: {device}")
+        
+        # 初始化模型和路徑
+        os2d_path = "./os2d_v2-train.pth"
+        if not os.path.exists(os2d_path):
+            pytest.skip(f"OS2D 預訓練模型不存在: {os2d_path}")
+        
+        # 載入模型與輔助網路
+        model = Os2dModelInPrune(pretrained_path=os2d_path).to(device)
+        aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+        
+        # 載入 VOC2007 數據集
+        from src.dataset_downloader import VOCDataset
+        from torch.utils.data import DataLoader
+        import unittest
+        import torch
+        import os
+        import pytest
+        import numpy as np
+        from hypothesis import given, strategies as st
+        
+        # 使用較小的批次大小，僅用於測試
+        batch_size = 2
+        
+        # 訓練集
+        train_dataset = VOCDataset(
+            data_path="./data/VOCdevkit/VOC2007",
+            split="train",
+            download=True
+        )
+        
+        # 自定義 collate_fn 以處理不同大小的樣本
+        def collate_fn(batch):
+            images = []
+            boxes = []
+            labels = []
+            
+            for sample in batch:
+                if isinstance(sample, tuple) and len(sample) >= 3:
+                    img, box, label = sample[:3]
+                elif isinstance(sample, dict):
+                    img = sample.get('image', None)
+                    box = sample.get('boxes', None)
+                    label = sample.get('labels', None)
+                else:
+                    continue
+                    
+                if img is not None and box is not None and label is not None:
+                    images.append(img)
+                    boxes.append(box)
+                    labels.append(label)
+            
+            # 確保數據維度正確
+            if images and isinstance(images[0], torch.Tensor):
+                if images[0].dim() == 3:  # [C,H,W]
+                    # 已經是正確格式
+                    pass
+                elif images[0].dim() == 2:  # [H,W]
+                    images = [img.unsqueeze(0) for img in images]  # 添加通道維度
+            
+            return images, boxes, labels
+        
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=0
+        )
+        
+        # 創建優化器
+        optimizer = torch.optim.Adam([
+            {'params': model.parameters()},
+            {'params': aux_net.parameters()}
+        ], lr=0.0001)
+        
+        # 定義測試參數
+        print_freq = 1
+        
+        # 執行訓練一個 epoch
+        print("開始執行 train_one_epoch 基本測試...")
+        
+        # 執行時傳遞 max_batches 參數 (如果支持)
+        try:
+            train_loss, component_losses = model.train_one_epoch(
+                train_loader=train_loader,
+                optimizer=optimizer,
+                auxiliary_net=aux_net,
+                device=device,
+                print_freq=print_freq,
+                max_batches=3  # 限制批次數，僅用於測試
+            )
+        except TypeError:
+            # 如果不支持 max_batches 參數，使用標準呼叫
+            print("模型不支援 max_batches 參數，使用標準呼叫...")
+            train_loss, component_losses = model.train_one_epoch(
+                train_loader=train_loader,
+                optimizer=optimizer,
+                auxiliary_net=aux_net,
+                device=device,
+                print_freq=print_freq
+            )
+        
+        # 驗證返回值
+        assert isinstance(train_loss, (float, np.float64)), "訓練損失應該是浮點數"
+        assert isinstance(component_losses, dict), "組件損失應該是字典"
+        assert 'cls' in component_losses, "組件損失中應該包含分類損失"
+        assert 'reg' in component_losses, "組件損失中應該包含回歸損失"
+        
+        # 打印結果
+        print(f"訓練損失: {train_loss:.4f}")
+        for k, v in component_losses.items():
+            print(f"  {k} 損失: {v:.4f}")
+            
+        print("✅ train_one_epoch 基本功能測試通過")
+        return True
+        
+    except Exception as e:
+        print(f"❌ train_one_epoch 基本功能測試失敗: {e}")
+        traceback.print_exc()
+        return False
+
+def test_lcp_prune_and_train_pipeline():
+    import torch
+    from torch.utils.data import DataLoader
+    from src.dataset_downloader import VOCDataset
+    from src.auxiliary_network import AuxiliaryNetwork
+    from src.os2d_model_in_prune import Os2dModelInPrune
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    os2d_path = "./os2d_v2-train.pth"
+    model = Os2dModelInPrune(pretrained_path=os2d_path, is_cuda=(device.type == 'cuda')).to(device)
+    aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+
+    train_set = VOCDataset("./data/VOCdevkit/VOC2007", split="train", download=True, img_size=(224, 224))
+    train_loader = DataLoader(train_set, batch_size=2, shuffle=True, collate_fn=VOCDataset.collate_fn)
+
+    prune_layers = ["layer2.0.conv1", "layer2.0.conv2", "layer3.0.conv1"]
+    prune_ratio = 0.3
+
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(aux_net.parameters()), lr=1e-3)
+
+    # 直接呼叫 model.finetune()，讓它自動完成逐層剪枝+微調
+    model.finetune(
+        train_loader=train_loader,
+        auxiliary_net=aux_net,
+        prune_layers=prune_layers,
+        prune_ratio=prune_ratio,
+        optimizer=optimizer,
+        device=device,
+        epochs_per_layer=1,   # 每層剪枝後微調 1 epoch
+        print_freq=1,
+        max_batches=3         # 每層只訓練 3 個 batch 以加速測試
+    )
+
+    print("\n✅ LCP 剪枝與微調 pipeline 測試通過")
+    return True
+
+def test_save_checkpoint():
+    import torch
+    import os
+    from torch.utils.data import DataLoader
+    from src.dataset_downloader import VOCDataset
+    from src.auxiliary_network import AuxiliaryNetwork
+    from src.os2d_model_in_prune import Os2dModelInPrune
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    os2d_path = "./os2d_v2-train.pth"
+    model = Os2dModelInPrune(pretrained_path=os2d_path, is_cuda=(device.type == 'cuda')).to(device)
+    aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+
+    train_set = VOCDataset(
+        "./data/VOCdevkit/VOC2007",
+        split="train",
+        download=True,
+        img_size=(224, 224)
+    )
+    train_loader = DataLoader(
+        train_set,
+        batch_size=2,
+        shuffle=True,
+        collate_fn=VOCDataset.collate_fn
+    )
+
+    # 定義要剪枝的層和比例
+    prune_layers = ["layer2.0.conv1", "layer2.0.conv2", "layer3.0.conv1"]
+    prune_ratio = 0.3
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(aux_net.parameters()), lr=1e-3)
+    checkpoint_path = "finetune_checkpoint.pth"
+
+    # 計算學生模型的參數量（排除教師模型）
+    orig_student_params = sum(p.numel() for name, p in model.named_parameters() 
+                           if not name.startswith('teacher_model'))
+    orig_total_params = sum(p.numel() for p in model.parameters())
+    
+    print(f"原始參數統計:")
+    print(f"  - 總參數量: {orig_total_params:,}")
+    print(f"  - 學生模型參數量: {orig_student_params:,}")
+    print(f"  - 教師模型參數量: {orig_total_params - orig_student_params:,}")
+
+    # 執行剪枝+微調，finetune 會自動呼叫 save_checkpoint
+    model.finetune(
+        train_loader=train_loader,
+        auxiliary_net=aux_net,
+        prune_layers=prune_layers,
+        prune_ratio=prune_ratio,
+        optimizer=optimizer,
+        device=device,
+        epochs_per_layer=1,
+        print_freq=1,
+        max_batches=3
+    )
+
+    # 驗證 checkpoint 是否存在
+    assert os.path.exists(checkpoint_path), "❌ checkpoint 檔案未正確儲存"
+    
+    # 記錄剪枝後的模型結構與學生模型參數量
+    pruned_structure = get_conv_structure(model)
+    pruned_student_params = sum(p.numel() for name, p in model.named_parameters() 
+                             if not name.startswith('teacher_model'))
+    pruned_total_params = sum(p.numel() for p in model.parameters())
+    
+    print(f"\n剪枝後參數統計:")
+    print(f"  - 總參數量: {pruned_total_params:,}")
+    print(f"  - 學生模型參數量: {pruned_student_params:,}")
+    print(f"  - 教師模型參數量: {pruned_total_params - pruned_student_params:,}")
+    print(f"  - 學生模型參數減少: {orig_student_params - pruned_student_params:,} ({(orig_student_params - pruned_student_params) / orig_student_params * 100:.2f}%)")
+    
+    # 創建一個新的模型實例，直接從剪枝後的檢查點載入
+    print("\n使用 pruned_checkpoint 參數載入模型...")
+    model_reloaded = Os2dModelInPrune(
+        pretrained_path=None, 
+        pruned_checkpoint=checkpoint_path,
+        is_cuda=(device.type == 'cuda')
+    ).to(device)
+    
+    # 檢查加載後的模型架構
+    loaded_structure = get_conv_structure(model_reloaded)
+    loaded_student_params = sum(p.numel() for name, p in model_reloaded.named_parameters() 
+                             if not name.startswith('teacher_model'))
+    loaded_total_params = sum(p.numel() for p in model_reloaded.parameters())
+    
+    print(f"\n載入後參數統計:")
+    print(f"  - 總參數量: {loaded_total_params:,}")
+    print(f"  - 學生模型參數量: {loaded_student_params:,}")
+    print(f"  - 教師模型參數量: {loaded_total_params - loaded_student_params:,}")
+
+    # 確認結構相同
+    assert len(pruned_structure) == len(loaded_structure), f"層數不匹配: 剪枝後 {len(pruned_structure)}, 載入後 {len(loaded_structure)}"
+    
+    # 檢查每一層的通道數是否匹配
+    for i, (orig, loaded) in enumerate(zip(pruned_structure, loaded_structure)):
+        orig_name, orig_in, orig_out, _ = orig
+        loaded_name, loaded_in, loaded_out, _ = loaded
+        
+        if i < 5 or i >= len(pruned_structure) - 5:  # 只顯示前5層和後5層
+            print(f"檢查層 {i}: {orig_name}")
+            print(f"  原始: in={orig_in}, out={orig_out}")
+            print(f"  載入: in={loaded_in}, out={loaded_out}")
+        
+        assert orig_in == loaded_in, f"層 {orig_name} 輸入通道數不匹配: 原始={orig_in}, 載入={loaded_in}"
+        assert orig_out == loaded_out, f"層 {orig_name} 輸出通道數不匹配: 原始={orig_out}, 載入={loaded_out}"
+    
+    # 驗證參數量是否正確一致
+    student_param_diff = abs(loaded_student_params - pruned_student_params)
+    assert student_param_diff < 100, f"載入後學生模型參數量與剪枝後不一致，差異: {student_param_diff}"
+    assert loaded_student_params < orig_student_params, f"剪枝後學生模型參數未減少: {loaded_student_params} >= {orig_student_params}"
+
+    # 測試前向傳播
+    print("\n執行前向傳播測試...")
+    batch_size = 1
+    images = torch.randn(batch_size, 3, 224, 224).to(device)
+    class_images = [torch.randn(3, 224, 224).to(device)]
+    
+    with torch.no_grad():
+        outputs = model_reloaded(images, class_images=class_images)
+        assert outputs is not None, "載入模型的前向傳播返回 None"
+        print("✓ 前向傳播測試通過")
+
+    print(f"\n✅ save_checkpoint 測試通過")
+    print(f"參數量變化摘要:")
+    print(f"  - 原始學生模型: {orig_student_params:,}")
+    print(f"  - 剪枝後學生模型: {pruned_student_params:,}")
+    print(f"  - 載入後學生模型: {loaded_student_params:,}")
+    print(f"  - 參數減少比例: {(orig_student_params - loaded_student_params) / orig_student_params * 100:.2f}%")
+    
+    # 清理測試文件
+    os.remove(checkpoint_path)
+    return True
+
+def get_conv_structure(model):
+    return [(name, m.in_channels, m.out_channels, m.kernel_size)
+            for name, m in model.backbone.named_modules() if isinstance(m, torch.nn.Conv2d)]
+
+def test_os2d_compatibility_with_pruned_model():
+    """測試剪枝後的模型能否正確放回原始 OS2D 框架中使用"""
+    import os
+    import torch
+    import torchvision.transforms as transforms
+    import matplotlib.pyplot as plt
+    from PIL import Image
+    
+    from os2d.modeling.model import build_os2d_from_config
+    from os2d.config import cfg
+    import os2d.utils.visualization as visualizer
+    from os2d.structures.feature_map import FeatureMapSize
+    from os2d.utils import setup_logger, read_image, get_image_size_after_resize_preserving_aspect_ratio
+    
+    from src.os2d_model_in_prune import Os2dModelInPrune
+    from src.auxiliary_network import AuxiliaryNetwork
+    from torch.utils.data import DataLoader
+    from src.dataset_downloader import VOCDataset
+    
+    print("\n===== 測試剪枝模型與原始 OS2D 框架相容性 =====")
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    os2d_path = "./os2d_v2-train.pth"
+    model = Os2dModelInPrune(pretrained_path=os2d_path, is_cuda=(device.type == 'cuda')).to(device)
+    aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+
+    train_set = VOCDataset(
+        "./data/VOCdevkit/VOC2007",
+        split="train",
+        download=True,
+        img_size=(224, 224)
+    )
+    train_loader = DataLoader(
+        train_set,
+        batch_size=2,
+        shuffle=True,
+        collate_fn=VOCDataset.collate_fn
+    )
+
+    # 定義要剪枝的層和比例
+    prune_layers = ["layer2.0.conv1", "layer2.0.conv2", "layer3.0.conv1"]
+    prune_ratio = 0.3
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(aux_net.parameters()), lr=1e-3)
+    checkpoint_path = "finetune_checkpoint.pth"
+
+    # 計算學生模型的參數量（排除教師模型）
+    orig_student_params = sum(p.numel() for name, p in model.named_parameters() 
+                           if not name.startswith('teacher_model'))
+    orig_total_params = sum(p.numel() for p in model.parameters())
+    
+    print(f"原始參數統計:")
+    print(f"  - 總參數量: {orig_total_params:,}")
+    print(f"  - 學生模型參數量: {orig_student_params:,}")
+    print(f"  - 教師模型參數量: {orig_total_params - orig_student_params:,}")
+
+    # 執行剪枝+微調，finetune 會自動呼叫 save_checkpoint
+    model.finetune(
+        train_loader=train_loader,
+        auxiliary_net=aux_net,
+        prune_layers=prune_layers,
+        prune_ratio=prune_ratio,
+        optimizer=optimizer,
+        device=device,
+        epochs_per_layer=1,
+        print_freq=1,
+        max_batches=3
+    )
+
+    # 驗證 checkpoint 是否存在
+    assert os.path.exists(checkpoint_path), "❌ checkpoint 檔案未正確儲存"
+    
+    # 記錄剪枝後的模型結構與學生模型參數量
+    pruned_structure = get_conv_structure(model)
+    pruned_student_params = sum(p.numel() for name, p in model.named_parameters() 
+                             if not name.startswith('teacher_model'))
+    pruned_total_params = sum(p.numel() for p in model.parameters())
+    
+    print(f"\n剪枝後參數統計:")
+    print(f"  - 總參數量: {pruned_total_params:,}")
+    print(f"  - 學生模型參數量: {pruned_student_params:,}")
+    print(f"  - 教師模型參數量: {pruned_total_params - pruned_student_params:,}")
+    print(f"  - 學生模型參數減少: {orig_student_params - pruned_student_params:,} ({(orig_student_params - pruned_student_params) / orig_student_params * 100:.2f}%)")
+    
+    # 創建一個新的模型實例，直接從剪枝後的檢查點載入
+    print("\n使用 pruned_checkpoint 參數載入模型...")
+    model_reloaded = Os2dModelInPrune(
+        pretrained_path=None, 
+        pruned_checkpoint=checkpoint_path,
+        is_cuda=(device.type == 'cuda')
+    ).to(device)
+    
+    # 檢查加載後的模型架構
+    loaded_structure = get_conv_structure(model_reloaded)
+    loaded_student_params = sum(p.numel() for name, p in model_reloaded.named_parameters() 
+                             if not name.startswith('teacher_model'))
+    loaded_total_params = sum(p.numel() for p in model_reloaded.parameters())
+    
+    print(f"\n載入後參數統計:")
+    print(f"  - 總參數量: {loaded_total_params:,}")
+    print(f"  - 學生模型參數量: {loaded_student_params:,}")
+    print(f"  - 教師模型參數量: {loaded_total_params - loaded_student_params:,}")
+
+    # 確認結構相同
+    assert len(pruned_structure) == len(loaded_structure), f"層數不匹配: 剪枝後 {len(pruned_structure)}, 載入後 {len(loaded_structure)}"
+    
+    # 檢查每一層的通道數是否匹配
+    for i, (orig, loaded) in enumerate(zip(pruned_structure, loaded_structure)):
+        orig_name, orig_in, orig_out, _ = orig
+        loaded_name, loaded_in, loaded_out, _ = loaded
+        
+        if i < 5 or i >= len(pruned_structure) - 5:  # 只顯示前5層和後5層
+            print(f"檢查層 {i}: {orig_name}")
+            print(f"  原始: in={orig_in}, out={orig_out}")
+            print(f"  載入: in={loaded_in}, out={loaded_out}")
+        
+        assert orig_in == loaded_in, f"層 {orig_name} 輸入通道數不匹配: 原始={orig_in}, 載入={loaded_in}"
+        assert orig_out == loaded_out, f"層 {orig_name} 輸出通道數不匹配: 原始={orig_out}, 載入={loaded_out}"
+    
+    # 驗證參數量是否正確一致
+    student_param_diff = abs(loaded_student_params - pruned_student_params)
+    assert student_param_diff < 100, f"載入後學生模型參數量與剪枝後不一致，差異: {student_param_diff}"
+    assert loaded_student_params < orig_student_params, f"剪枝後學生模型參數未減少: {loaded_student_params} >= {orig_student_params}"
+
+    # 測試前向傳播
+    print("\n執行前向傳播測試...")
+    batch_size = 1
+    images = torch.randn(batch_size, 3, 224, 224).to(device)
+    class_images = [torch.randn(3, 224, 224).to(device)]
+    
+    with torch.no_grad():
+        outputs = model_reloaded(images, class_images=class_images)
+        assert outputs is not None, "載入模型的前向傳播返回 None"
+        print("✓ 前向傳播測試通過")
+
+    print(f"\n✅ save_checkpoint 測試通過")
+    print(f"參數量變化摘要:")
+    print(f"  - 原始學生模型: {orig_student_params:,}")
+    print(f"  - 剪枝後學生模型: {pruned_student_params:,}")
+    print(f"  - 載入後學生模型: {loaded_student_params:,}")
+    print(f"  - 參數減少比例: {(orig_student_params - loaded_student_params) / orig_student_params * 100:.2f}%")
+    
+    logger = setup_logger("OS2D")
+    cfg.init.model = "finetune_checkpoint.pth"
+    net, box_coder, criterion, img_normalization, optimizer_state = build_os2d_from_config(cfg)

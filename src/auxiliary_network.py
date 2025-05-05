@@ -131,3 +131,16 @@ class AuxiliaryNetwork(nn.Module):
     def get_current_channels(self):
         """獲取當前輸入通道數 (用於驗證)"""
         return self.conv.in_channels
+
+    def train(self, mode=True):
+        """
+        設置網路為訓練模式，並確保所有子模塊同步更新狀態
+        參數:
+            mode (bool): True為訓練模式，False為評估模式
+        返回:
+            self: 返回網路實例以支持鏈式調用
+        """
+        self.training = mode
+        for module in self.children():
+            module.train(mode)
+        return self

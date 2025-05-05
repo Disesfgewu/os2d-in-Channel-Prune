@@ -308,7 +308,7 @@ class Os2dModel(nn.Module):
                 checkpoint = None
 
             if checkpoint and "net" in checkpoint:
-                self.load_state_dict(checkpoint["net"])
+                self.load_state_dict(checkpoint["net"], strict=False)
                 self.logger.info("Loaded complete model from checkpoint")
             else:
                 self.logger.info("Cannot find 'net' in the checkpoint file")

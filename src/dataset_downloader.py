@@ -25,6 +25,7 @@ import shutil
 # from lcp_channel_selector import *
 # from os2d_resnet import *
 
+# 全局變數 - 使類別對象可訪問這些類別
 VOC_CLASSES = [
     'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat',
     'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person',
@@ -32,7 +33,11 @@ VOC_CLASSES = [
 ]
 
 class VOCDataset(torch.utils.data.Dataset):
-    def __init__(self, data_path, split='train', transform=None, download=True):
+    # 添加靜態類變數以便測試可以訪問
+    CLASSES = VOC_CLASSES
+    
+    def __init__(self, data_path, split='train', transform=None, target_transform=None, download=True, 
+                 random_seed=None, img_size=(224,224), class_mapping=None):
         # 如果需要下載且路徑不存在有效數據集，則下載
         if download:
             self.data_path = self._download_voc(data_path)
@@ -41,8 +46,16 @@ class VOCDataset(torch.utils.data.Dataset):
             
         self.split = split
         self.transform = transform
+        self.target_transform = target_transform
         self.samples = []
         self.cache = {}
+        self.img_size = img_size
+        self.class_mapping = class_mapping or {i: i for i in range(len(VOC_CLASSES))}
+        
+        # 設置隨機種子以確保確定性行為
+        if random_seed is not None:
+            torch.manual_seed(random_seed)
+            np.random.seed(random_seed)
 
         # 路徑結構與分割檔案檢查
         self._fix_nested_path_structure()
@@ -195,18 +208,184 @@ class VOCDataset(torch.utils.data.Dataset):
                 float(bbox.find('ymax').text)
             ]
             boxes.append(box)
-            labels.append(VOC_CLASSES.index(name))
-        return (img_path, boxes, labels)
+            label_idx = VOC_CLASSES.index(name)
+            labels.append(label_idx)
+            
+        return img_path, boxes, labels
 
     def __getitem__(self, idx):
+        """獲取資料集中的一個樣本，並提取類別圖像"""
         img_id = self.samples[idx]
         img_path, boxes, labels = self.cache[img_id]
+        
+        # 載入圖像
         img = Image.open(img_path).convert('RGB')
         img = np.asarray(img).copy()
-        img = torch.from_numpy(img).float().permute(2, 0, 1) / 255.0
+        
+        # 確保所有數據都是張量格式
+        if not isinstance(img, torch.Tensor):
+            # 將圖像轉換為張量
+            if isinstance(img, np.ndarray):
+                img = torch.from_numpy(img).float()
+            else:
+                img = torch.tensor(img, dtype=torch.float)
+        
+        # 確保邊界框是張量
+        if isinstance(boxes, list):
+            if len(boxes) > 0:
+                boxes = torch.tensor(boxes, dtype=torch.float)
+            else:
+                boxes = torch.zeros((0, 4), dtype=torch.float)
+        
+        # 確保標籤是張量
+        if isinstance(labels, list):
+            if len(labels) > 0:
+                # 應用類別映射
+                mapped_labels = [self.class_mapping.get(l, l) for l in labels]
+                labels = torch.tensor(mapped_labels, dtype=torch.long)
+            else:
+                labels = torch.zeros((0,), dtype=torch.long)
+        
+        # 轉換圖像通道順序
+        if img.shape[0] == 3:  # 已經是 [C, H, W] 格式
+            pass
+        elif img.shape[2] == 3:  # 如果是 [H, W, C] 格式
+            img = img.permute(2, 0, 1)
+        
+        # 正規化像素值到 [0, 1]
+        if img.max() > 1.0:
+            img = img / 255.0
+        
+        # 調整圖像尺寸 (如果指定了目標尺寸)
+        original_size = (img.shape[2], img.shape[1])  # (W, H)
+        if self.img_size is not None:
+            # 調整圖像尺寸
+            img = F.interpolate(img.unsqueeze(0), size=self.img_size, 
+                               mode='bilinear', align_corners=False).squeeze(0)
+            
+            # 調整框座標 - 根據縮放比例
+            if boxes.numel() > 0:
+                scale_w = self.img_size[0] / original_size[0]
+                scale_h = self.img_size[1] / original_size[1]
+                
+                # 應用縮放
+                boxes[:, 0] *= scale_w  # x_min
+                boxes[:, 2] *= scale_w  # x_max
+                boxes[:, 1] *= scale_h  # y_min
+                boxes[:, 3] *= scale_h  # y_max
+                
+                # 確保框座標在有效範圍內
+                boxes[:, 0].clamp_(0, self.img_size[0])
+                boxes[:, 2].clamp_(0, self.img_size[0])
+                boxes[:, 1].clamp_(0, self.img_size[1])
+                boxes[:, 3].clamp_(0, self.img_size[1])
+                
+        # 應用圖像轉換
         if self.transform:
             img = self.transform(img)
-        return img, torch.tensor(boxes), torch.tensor(labels), img_id
+            
+        # 應用目標轉換
+        if self.target_transform:
+            boxes, labels = self.target_transform(boxes, labels)
+        
+        # 關鍵改進：從目標區域提取類別圖像
+        class_images = []
+        class_size = 64  # 類別圖像標準尺寸
+        
+        if len(boxes) > 0:
+            for i in range(min(len(boxes), 3)):  # 最多取3個目標區域作為類別圖像
+                # 獲取框座標
+                x1, y1, x2, y2 = boxes[i].tolist()
+                
+                # 確保座標是整數且在有效範圍內
+                h, w = img.shape[1], img.shape[2]
+                x1, y1 = max(0, int(x1)), max(0, int(y1))
+                x2, y2 = min(w - 1, int(x2)), min(h - 1, int(y2))
+                
+                if x2 > x1 and y2 > y1:
+                    # 提取目標區域
+                    class_img = img[:, y1:y2, x1:x2].clone()
+                    
+                    # 調整尺寸為標準類別圖像尺寸
+                    class_img = torch.nn.functional.interpolate(
+                        class_img.unsqueeze(0),  # [1, C, H, W]
+                        size=(class_size, class_size),
+                        mode='bilinear',
+                        align_corners=False
+                    ).squeeze(0)  # [C, class_size, class_size]
+                    
+                    class_images.append(class_img)
+        
+        # 如果沒有有效類別圖像，創建一個默認的
+        if not class_images:
+            # 使用中心區域作為默認類別圖像
+            h, w = img.shape[1], img.shape[2]
+            center_h, center_w = h // 2, w // 2
+            size_h, size_w = h // 4, w // 4
+            
+            y1, y2 = max(0, center_h - size_h), min(h, center_h + size_h)
+            x1, x2 = max(0, center_w - size_w), min(w, center_w + size_w)
+            
+            default_class = img[:, y1:y2, x1:x2].clone()
+            default_class = torch.nn.functional.interpolate(
+                default_class.unsqueeze(0),
+                size=(class_size, class_size),  # 修正：添加大小參數
+                mode='bilinear',  # 修正：指定插值模式
+                align_corners=False
+            ).squeeze(0)
+            
+            class_images.append(default_class)
+        
+        # 將類別圖像堆疊為單一張量
+        if len(class_images) > 1:
+            # 多個類別圖像，堆疊為 [num_classes, C, H, W]
+            class_images = torch.stack(class_images)
+        else:
+            # 單個類別圖像，確保為 [1, C, H, W]
+            class_images = class_images[0].unsqueeze(0)
+        
+        # print(f"VOC 返回: 圖像形狀={img.shape}, 框形狀={boxes.shape}, 類別形狀={labels.shape}, 類別圖像形狀={class_images.shape}")
+        
+        # 返回圖像、目標框、類別標籤和類別圖像
+        return img, boxes, labels, class_images
 
     def __len__(self):
         return len(self.samples)
+        
+    @staticmethod
+    def collate_fn(batch):
+        """自定義批次整合函數，將主圖像resize為224×224，類別圖像resize為64×64（或224×224），並組成batch"""
+        images = []
+        boxes_list = []
+        labels_list = []
+        class_images_list = []
+
+        for img, boxes, labels, class_images in batch:
+            # 保證主圖像為 [3, 224, 224]
+            if img.shape[1:] != (224, 224):
+                img = torch.nn.functional.interpolate(
+                    img.unsqueeze(0), size=(224, 224), mode='bilinear', align_corners=False
+                ).squeeze(0)
+            images.append(img)
+
+            boxes_list.append(boxes)
+            labels_list.append(labels)
+
+            # 保證每個 class image 為 [N, 3, 64, 64] 或 [N, 3, 224, 224]
+            resized_class_images = []
+            for cimg in class_images:
+                if cimg.shape[1:] != (64, 64):  # 你也可以用 (224, 224)
+                    cimg = torch.nn.functional.interpolate(
+                        cimg.unsqueeze(0), size=(64, 64), mode='bilinear', align_corners=False
+                    ).squeeze(0)
+                resized_class_images.append(cimg)
+            # 堆疊
+            resized_class_images = torch.stack(resized_class_images)
+            class_images_list.append(resized_class_images)
+
+        # 組 batch
+        images = torch.stack(images)  # [B, 3, 224, 224]
+        # 類別圖像合併成一個大 tensor [sum_N, 3, 64, 64]
+        all_class_images = torch.cat(class_images_list, dim=0)
+
+        return [images, boxes_list, labels_list, all_class_images]

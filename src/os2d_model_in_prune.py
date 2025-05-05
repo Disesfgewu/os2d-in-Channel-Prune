@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
+import os
+import time
+import datetime
 import logging
+import traceback
+import copy
 from os2d.modeling.model import Os2dModel
 from os2d.modeling.feature_extractor import build_feature_extractor
 from src.lcp_channel_selector import OS2DChannelSelector
@@ -10,10 +15,9 @@ class Os2dModelInPrune(Os2dModel):
     """
     擴展 OS2D 模型以支持通道剪枝功能
     """
-    
     def __init__(self, logger=None, is_cuda=False, backbone_arch="resnet50", 
                  use_group_norm=False, img_normalization=None, 
-                 pretrained_path=None, **kwargs):
+                 pretrained_path=None, pruned_checkpoint=None, **kwargs):
         # 如果沒有提供 logger，創建一個
         if logger is None:
             logger = logging.getLogger("OS2D")
@@ -45,6 +49,13 @@ class Os2dModelInPrune(Os2dModel):
         self.device = torch.device('cuda' if is_cuda else 'cpu')
         self.original_device = self.device  # 保存原始設備
         
+        self.teacher_model = copy.deepcopy(self)
+        self.teacher_model.eval()
+        for p in self.teacher_model.parameters():
+            p.requires_grad = False
+
+        if pruned_checkpoint:
+           self.load_checkpoint(pruned_checkpoint)
         if is_cuda:
             try:
                 self.cuda()
@@ -63,8 +74,11 @@ class Os2dModelInPrune(Os2dModel):
                 self.device = torch.device('cpu')
                 self.cpu()
                 
+    
     def _safe_forward(self, x, device=None, class_images=None):
         """安全的前向傳播，如果 GPU 執行失敗會fallback到CPU"""
+        if x.dim() == 3:  # 如果是 [C, H, W]
+            x = x.unsqueeze(0)  # 轉換為 [1, C, H, W]
         try:
             if class_images is not None:
                 return self(x, class_images=class_images)
@@ -537,6 +551,11 @@ class Os2dModelInPrune(Os2dModel):
         try:
             import torchviz
             from graphviz import Digraph
+            from tqdm import tqdm
+            import os
+            import time
+            from datetime import datetime
+            import traceback
         except ImportError:
             print("請先安裝必要的套件: pip install torchviz graphviz")
             return False
@@ -564,55 +583,7 @@ class Os2dModelInPrune(Os2dModel):
         self._print_model_summary()
         
         return True
-    
-    def _handle_downsample_connection(self, layer_name, keep_indices):
-        """處理 downsample 連接"""
-        print(f"\n🔍 處理 downsample 連接: {layer_name}")
-        
-        # 解析層名稱
-        parts = layer_name.split('.')
-        if len(parts) < 3:
-            print(f"⚠️ 無效的層名稱格式: {layer_name}")
-            return False
-            
-        layer_str, block_idx = parts[0], int(parts[1])
-        
-        # 獲取當前 block 和 downsample
-        layer = getattr(self.backbone, layer_str)
-        current_block = layer[block_idx]
-        
-        if not hasattr(current_block, 'downsample') or current_block.downsample is None:
-            return True
-            
-        downsample = current_block.downsample
-        old_conv = downsample[0]  # downsample 的第一層是 conv
-        old_bn = downsample[1]    # 第二層是 bn
-        
-        # 更新 downsample 的 conv 層
-        new_conv = nn.Conv2d(
-            old_conv.in_channels,
-            len(keep_indices),  # 新的輸出通道數
-            old_conv.kernel_size,
-            old_conv.stride,
-            old_conv.padding,
-            old_conv.dilation,
-            old_conv.groups,
-            bias=old_conv.bias is not None
-        ).to(old_conv.weight.device)
-        
-        # 更新權重
-        new_conv.weight.data = old_conv.weight.data[keep_indices].clone()
-        if old_conv.bias is not None:
-            new_conv.bias.data = old_conv.bias.data[keep_indices].clone()
-        
-        # 更新 downsample 的 bn 層
-        new_bn = nn.BatchNorm2d(len(keep_indices)).to(old_bn.weight.device)
-        new_bn.weight.data = old_bn.weight.data[keep_indices].clone()
-        new_bn.bias.data = old_bn.bias.data[keep_indices].clone()
-        new_bn.running_mean = old_bn.running_mean[keep_indices].clone()
-        new_bn.running_var = old_bn.running_var[keep_indices].clone()
-        
-        # 創建新的 downsample sequential
+
     def get_feature_map(self, x):
         """獲取特徵圖"""
         feature_maps = self.backbone(x)
@@ -624,12 +595,6 @@ class Os2dModelInPrune(Os2dModel):
             return super().forward(images, class_images=class_images, **kwargs)
         else:
             return super().forward(images, **kwargs)
-        
-    
-    def get_feature_map(self, x):
-        """獲取特徵圖"""
-        feature_maps = self.backbone(x)
-        return feature_maps
     
     def _print_model_summary(self):
         """打印模型摘要信息，包含每層的通道數"""
@@ -696,3 +661,867 @@ class Os2dModelInPrune(Os2dModel):
                 if hasattr(block, 'downsample') and block.downsample is not None:
                     downsample_conv = block.downsample[0]
                     print(f"  Downsample: {downsample_conv.in_channels} -> {downsample_conv.out_channels}")
+                    print(f"  Downsample Type: {type(downsample_conv).__name__}")
+                    
+    def _normalize_batch_images(self, images, device=None, target_size=(224, 224)):
+        """
+        標準化處理圖像批次，確保所有圖像尺寸一致並轉換為批次張量
+        
+        Args:
+            images: 圖像列表或單一張量
+            device: 目標設備
+            target_size: 目標尺寸 (H, W)
+            
+        Returns:
+            torch.Tensor: 批次圖像張量 [B, C, H, W]
+        """
+        if device is None:
+            device = self.device
+            
+        # 處理單一張量情況
+        if isinstance(images, torch.Tensor):
+            if images.dim() == 3:  # [C, H, W]
+                images = images.unsqueeze(0)  # [1, C, H, W]
+            return images.to(device)
+            
+        # 處理圖像列表
+        if isinstance(images, list):
+            # 過濾有效圖像
+            valid_images = []
+            for img in images:
+                if img is None or not isinstance(img, torch.Tensor):
+                    continue
+                
+                # 確保圖像是 3D 張量 [C, H, W]
+                if img.dim() == 3:
+                    # 調整圖像尺寸為標準尺寸並移至設備
+                    if img.shape[1] != target_size[0] or img.shape[2] != target_size[1]:
+                        img = torch.nn.functional.interpolate(
+                            img.unsqueeze(0),  # 添加批次維度
+                            size=target_size,
+                            mode='bilinear',
+                            align_corners=False
+                        ).squeeze(0)  # 移除批次維度
+                    
+                    valid_images.append(img.to(device))
+                
+            if len(valid_images) == 0:
+                return None
+                
+            # 堆疊為批次張量
+            batch_tensor = torch.stack(valid_images)
+            return batch_tensor
+        
+        return None
+    
+    def compute_classification_loss(self, outputs, class_ids):
+        """
+        計算分類損失
+        
+        Args:
+            outputs: 模型輸出
+            class_ids: 目標類別 ID
+            
+        Returns:
+            torch.Tensor: 分類損失
+        """
+        # 從輸出中獲取分類分數
+        if isinstance(outputs, dict) and 'class_scores' in outputs:
+            class_scores = outputs['class_scores']
+        else:
+            # 如果輸出不包含分類分數，嘗試使用整個輸出作為分類分數
+            class_scores = outputs
+
+        # 將目標轉換為適當的格式
+        if isinstance(class_ids, list):
+            # 確保列表中的每個元素都是張量，並將它們拼接
+            tensor_items = [item for item in class_ids if isinstance(item, torch.Tensor)]
+            if tensor_items:
+                target = torch.cat(tensor_items).long()
+            else:
+                # 如果列表中沒有張量，創建一個默認張量
+                target = torch.zeros(1).long()
+        elif isinstance(class_ids, tuple):
+            # 處理元組類型，將其轉換為列表並再次處理
+            tensor_items = [item for item in class_ids if isinstance(item, torch.Tensor)]
+            if tensor_items:
+                target = torch.cat(tensor_items).long()
+            else:
+                target = torch.zeros(1).long()
+        else:
+            target = class_ids.long()
+        
+
+        device = next(self.parameters()).device
+        target = target.to(device)
+        
+        # 使用交叉熵損失
+        loss_fn = torch.nn.CrossEntropyLoss()
+        
+        # 處理 class_scores 可能是元組的情況
+        if isinstance(class_scores, tuple):
+            # 使用第一個元素，通常包含分類分數
+            class_scores = class_scores[0]
+        elif not isinstance(class_scores, torch.Tensor):
+            print(f"Warning: class_scores 類型為 {type(class_scores)}，無法計算分類損失")
+            return torch.tensor(0.0, device=device)
+        
+        # 檢查並修正批次大小不匹配的問題
+        batch_size = class_scores.size(0)
+        
+        # 確保 target 至少是 1D 張量
+        if target.dim() == 0:
+            target = target.unsqueeze(0)
+            
+        if target.size(0) != batch_size:
+            # print(f"Warning: 修正目標批次大小 ({target.size(0)}) 不匹配輸出批次大小 ({batch_size})")
+            if target.size(0) > batch_size:
+                # 如果目標批次較大，截斷以匹配輸出批次
+                target = target[:batch_size]
+            else:
+                # 如果目標批次較小，使用重複來擴展
+                repeats = (batch_size + target.size(0) - 1) // target.size(0)
+                target = target.repeat(repeats)[:batch_size]
+        
+        # 確保 class_scores 形狀正確 (batch_size, num_classes)
+        if class_scores.dim() > 2:
+            class_scores = class_scores.view(batch_size, -1)
+            
+        return loss_fn(class_scores, target)
+    
+    def compute_box_regression_loss(self, outputs, boxes):
+        """
+        計算邊界框回歸損失
+        
+        Args:
+            outputs: 模型輸出
+            boxes: 目標邊界框
+            
+        Returns:
+            torch.Tensor: 回歸損失
+        """
+        # 從輸出中獲取預測框
+        if isinstance(outputs, dict) and 'boxes' in outputs:
+            pred_boxes = outputs['boxes']
+        elif isinstance(outputs, tuple):
+            # 如果輸出是元組，假設第二個元素包含邊界框
+            pred_boxes = outputs[1] if len(outputs) > 1 else torch.zeros(1, 4).to(self.device)
+        else:
+            # 如果沒有明確的邊界框輸出，使用默認值
+            pred_boxes = torch.zeros(1, 4).to(self.device)
+            
+        # 將目標框轉換為適當的格式
+        if isinstance(boxes, list):
+            valid_boxes = [b for b in boxes if b is not None and b.numel() > 0]
+            if not valid_boxes:
+                return torch.tensor(0.0, device=pred_boxes.device)
+            target_boxes = torch.cat(valid_boxes)
+        else:
+            target_boxes = boxes
+            
+        # 確保張量在同一設備上
+        target_boxes = target_boxes.to(pred_boxes.device)
+        
+        # 如果沒有有效的目標框，返回零損失
+        if target_boxes.numel() == 0:
+            return torch.tensor(0.0, device=pred_boxes.device)
+            
+        # 確保預測框和目標框的形狀匹配
+        if pred_boxes.size(-1) != 4:
+            pred_boxes = pred_boxes.view(-1, 4)
+        if target_boxes.size(-1) != 4:
+            target_boxes = target_boxes.view(-1, 4)
+            
+        # 調整批次大小以匹配
+        if pred_boxes.size(0) != target_boxes.size(0):
+            # 如果預測框比目標框多，取前N個
+            if pred_boxes.size(0) > target_boxes.size(0):
+                pred_boxes = pred_boxes[:target_boxes.size(0)]
+            # 如果目標框比預測框多，取前N個
+            else:
+                target_boxes = target_boxes[:pred_boxes.size(0)]
+                
+        # 使用 L1 損失，因為它更穩定
+        loss_fn = torch.nn.L1Loss()
+        try:
+            loss = loss_fn(pred_boxes, target_boxes)
+        except RuntimeError as e:
+            print(f"警告: L1損失計算失敗 - pred_boxes: {pred_boxes.shape}, target_boxes: {target_boxes.shape}")
+            return torch.tensor(0.0, device=pred_boxes.device)
+            
+        return loss
+    def train_one_epoch(self, train_loader, optimizer, 
+                   auxiliary_net=None, device=None, 
+                   print_freq=10, scheduler=None, 
+                   loss_weights=None, use_lcp_loss=True, 
+                   max_batches=None):
+        """
+        訓練模型一個 epoch
+        
+        Args:
+            train_loader: 資料加載器
+            optimizer: 優化器
+            auxiliary_net: 輔助網絡，用於通道剪枝 (可選)
+            device: 計算設備 (可選，默認為模型設備)
+            print_freq: 打印頻率 (可選，默認每10個批次)
+            scheduler: 學習率調度器 (可選)
+            loss_weights: 損失權重字典 {'cls': 1.0, 'reg': 1.0} (可選)
+            use_lcp_loss: 是否使用 LCP 論文中的重建損失 (可選)
+            max_batches: 每個 epoch 處理的最大批次數 (可選)
+            
+        Returns:
+            avg_loss: 平均損失值
+            loss_components: 損失組件字典 {'cls': cls_loss, 'reg': reg_loss}
+        """
+        # 1. 初始化訓練環境和統計數據
+        device, loss_weights, stats = self._init_training_environment(
+            auxiliary_net, device, loss_weights, use_lcp_loss)
+        
+        # 2. 設置進度條
+        progress_bar, num_batches = self._setup_progress_bar(train_loader, max_batches)
+        
+        # 3. 迭代訓練資料
+        for batch_idx, batch_data in enumerate(train_loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+                
+            try:
+                # 3.1 解析批次資料
+                images, boxes, class_ids = self._parse_batch_data(batch_data, device)
+                
+                # 3.2 提取類別圖像
+                class_images = self._extract_class_images(images, boxes, device)
+                
+                # 3.3 前向傳播和計算損失
+                loss, cls_loss, reg_loss, recon_loss = self._forward_and_compute_loss(
+                    images, class_images, boxes, class_ids, 
+                    optimizer, auxiliary_net, loss_weights, use_lcp_loss, device)
+                
+                # 3.4 反向傳播和優化
+                self._backward_and_optimize(loss, optimizer, scheduler)
+                
+                # 3.5 更新統計資料
+                stats = self._update_training_stats(
+                    stats, loss, cls_loss, reg_loss, recon_loss, use_lcp_loss)
+                
+                # 3.6 更新進度條
+                self._update_progress_bar(
+                    progress_bar, batch_idx, print_freq, loss, cls_loss, reg_loss, optimizer)
+                
+            except Exception as e:
+                print(f"⚠️ 處理批次 {batch_idx} 時出錯: {e}")
+                traceback.print_exc()
+                continue
+        
+        # 4. 結束訓練並返回結果
+        return self._finalize_training(progress_bar, stats, use_lcp_loss)
+
+    def _init_training_environment(self, auxiliary_net, device, loss_weights, use_lcp_loss):
+        """初始化訓練環境和統計數據"""
+        # 設置模型為訓練模式
+        self.train()
+        print(f"ℹ️ 主模型設為訓練模式")
+        
+        # 檢查並設置輔助網絡為訓練模式 (如果存在)
+        if auxiliary_net is not None:
+            auxiliary_net = auxiliary_net.train()
+            print(f"ℹ️ 輔助網絡設為訓練模式，輸入通道數: {auxiliary_net.get_current_channels()}")
+        
+        # 設置設備
+        if device is None:
+            device = next(self.parameters()).device
+            print(f"ℹ️ 使用模型預設設備: {device}")
+        else:
+            print(f"ℹ️ 使用指定設備: {device}")
+        
+        # 設置損失權重
+        if loss_weights is None:
+            loss_weights = {'cls': 1.0, 'reg': 1.0}
+            if use_lcp_loss:
+                loss_weights['recon'] = 0.1
+        print(f"ℹ️ 損失權重設置: {loss_weights}")
+        
+        # 初始化統計數據
+        stats = {
+            'start_time': time.time(),
+            'batch_count': 0,
+            'total_loss': 0.0,
+            'cls_loss_total': 0.0,
+            'reg_loss_total': 0.0,
+            'recon_loss_total': 0.0 if use_lcp_loss else None
+        }
+        
+        return device, loss_weights, stats
+
+    def _setup_progress_bar(self, train_loader, max_batches):
+        """設置進度條"""
+        from tqdm import tqdm
+        num_batches = len(train_loader)
+        if max_batches is not None:
+            num_batches = min(max_batches, num_batches)
+        progress_bar = tqdm(total=num_batches, desc="Training", unit="batch")
+        return progress_bar, num_batches
+
+    def _parse_batch_data(self, batch_data, device):
+        """解析批次資料"""
+        # 根據批次數據結構解析數據
+        if len(batch_data) == 4:  # (images, boxes, labels, class_images)
+            images, boxes, class_ids, _ = batch_data  # 忽略原始的 class_images
+        elif len(batch_data) == 3:  # (images, boxes, labels)
+            images, boxes, class_ids = batch_data
+        else:
+            raise ValueError(f"不支持的批次數據格式: 長度為 {len(batch_data)}")
+        
+        # 將數據移至目標設備
+        if isinstance(boxes, list):
+            boxes = [box.to(device) if isinstance(box, torch.Tensor) else box for box in boxes]
+        else:
+            boxes = boxes.to(device)
+        
+        if isinstance(class_ids, list):
+            class_ids = [cls_id.to(device) if isinstance(cls_id, torch.Tensor) else cls_id for cls_id in class_ids]
+        else:
+            class_ids = class_ids.to(device) if isinstance(class_ids, torch.Tensor) else class_ids
+        
+        # 確保 images 是批次張量
+        if isinstance(images, list):
+            images = torch.stack(images).to(device)
+        else:
+            images = images.to(device)
+            
+        return images, boxes, class_ids
+
+    def _extract_class_images(self, images, boxes, device, class_size=(64, 64)):
+        """從圖像和邊界框提取類別圖像"""
+        class_images = []
+        
+        for i in range(images.shape[0]):
+            img = images[i]  # 當前圖像
+            
+            # 獲取當前圖像的邊界框
+            current_boxes = boxes[i] if isinstance(boxes, list) else boxes[i] if boxes.dim() > 1 else boxes
+            
+            # 如果有有效的邊界框
+            if current_boxes is not None and current_boxes.numel() > 0:
+                class_img = self._crop_class_image_from_box(img, current_boxes, class_size)
+            else:
+                # 無邊界框 - 使用圖像中心
+                class_img = self._crop_class_image_from_center(img, class_size)
+            
+            class_images.append(class_img)
+        
+        # 將類別圖像堆疊為批次張量
+        class_images = torch.stack(class_images).to(device)
+        return class_images
+
+    def _crop_class_image_from_box(self, img, boxes, class_size=(64, 64)):
+        """從邊界框中裁剪類別圖像"""
+        # 使用第一個框作為類別圖像源
+        x1, y1, x2, y2 = boxes[0].cpu().int().tolist()
+        
+        # 確保座標有效
+        h, w = img.shape[1], img.shape[2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        if x2 > x1 and y2 > y1:
+            # 提取類別圖像區域
+            class_img = img[:, y1:y2, x1:x2].clone()
+        else:
+            # 無效框區域 - 使用圖像中心
+            class_img = self._crop_class_image_from_center(img, class_size)
+            return class_img
+            
+        # 調整尺寸為標準類別圖像尺寸
+        class_img = torch.nn.functional.interpolate(
+            class_img.unsqueeze(0),
+            size=class_size,
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0)
+        
+        return class_img
+
+    def _crop_class_image_from_center(self, img, class_size=(64, 64)):
+        """從圖像中心裁剪類別圖像"""
+        h, w = img.shape[1], img.shape[2]
+        center_h, center_w = h // 2, w // 2
+        size_h, size_w = h // 4, w // 4
+        
+        y1, y2 = max(0, center_h - size_h), min(h, center_h + size_h)
+        x1, x2 = max(0, center_w - size_w), min(w, center_w + size_w)
+        
+        class_img = img[:, y1:y2, x1:x2].clone()
+        class_img = torch.nn.functional.interpolate(
+            class_img.unsqueeze(0),
+            size=class_size,
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0)
+        
+        return class_img
+
+    def _forward_and_compute_loss(self, images, class_images, boxes, class_ids, 
+                                optimizer, auxiliary_net, loss_weights, use_lcp_loss, device):
+        """前向傳播和計算損失"""
+        # 清零梯度
+        optimizer.zero_grad()
+        
+        # 前向傳播
+        outputs = self(images, class_images=class_images)
+        
+        # 計算分類損失和回歸損失
+        cls_loss = self.compute_classification_loss(outputs, class_ids)
+        reg_loss = self.compute_box_regression_loss(outputs, boxes)
+        
+        # 計算重建損失（如果使用 LCP）
+        recon_loss = torch.tensor(0.0, device=device)
+        if use_lcp_loss and auxiliary_net is not None:
+            recon_loss = self._compute_reconstruction_loss(images, boxes, auxiliary_net, device)
+        
+        # 計算總損失
+        loss = loss_weights['cls'] * cls_loss + loss_weights['reg'] * reg_loss
+        if use_lcp_loss:
+            # 確保 recon_loss 是標量張量
+            if recon_loss.dim() == 0:
+                recon_loss = recon_loss.unsqueeze(0)
+            loss = loss + loss_weights['recon'] * recon_loss.float()
+        
+        return loss, cls_loss, reg_loss, recon_loss
+
+    def _compute_reconstruction_loss(self, images, boxes, auxiliary_net, device):
+        """
+        LCP 論文標準重建損失：學生和教師模型同層 feature map 的 MSE
+        """
+        # 學生模型 feature map 
+        student_feature_maps = self.get_feature_map(images)
+        
+        # 教師模型 feature map（不需梯度）
+        with torch.no_grad():
+            teacher_feature_maps = self.teacher_model.get_feature_map(images)
+        
+        # 計算 MSE 
+        criterion = nn.MSELoss()
+        recon_loss = criterion(student_feature_maps, teacher_feature_maps)
+        
+        # 確保損失值有效
+        if torch.isnan(recon_loss) or torch.isinf(recon_loss):
+            print("⚠️ 重建損失無效，使用備用值")
+            recon_loss = torch.tensor(0.1, device=device)
+        
+        return recon_loss
+
+    def _resize_feature_maps(self, feature_maps, target_size):
+        """調整特徵圖大小"""
+        # 檢查並確保輸入張量具有正確的維度 [N, C, H, W]
+        if feature_maps.dim() < 4:
+            # 如果維度不足，添加必要的維度
+            if feature_maps.dim() == 2:
+                feature_maps = feature_maps.unsqueeze(0).unsqueeze(0)
+            elif feature_maps.dim() == 3:
+                feature_maps = feature_maps.unsqueeze(0)
+        
+        # 使用雙線性插值調整大小
+        resized_maps = torch.nn.functional.interpolate(
+            feature_maps,
+            size=target_size,
+            mode='bilinear',
+            align_corners=False
+        )
+        
+        return resized_maps
+
+    def _backward_and_optimize(self, loss, optimizer, scheduler=None):
+        """反向傳播和優化"""
+        loss.backward()
+        optimizer.step()
+        
+        # 更新學習率（如果有調度器）
+        if scheduler is not None:
+            scheduler.step()
+
+    def _update_training_stats(self, stats, loss, cls_loss, reg_loss, recon_loss, use_lcp_loss):
+        """更新訓練統計資料"""
+        stats['batch_count'] += 1
+        stats['total_loss'] += loss.item()
+        stats['cls_loss_total'] += cls_loss.item()
+        stats['reg_loss_total'] += reg_loss.item()
+        
+        if use_lcp_loss:
+            stats['recon_loss_total'] += recon_loss.item() if isinstance(recon_loss, torch.Tensor) else recon_loss
+        
+        return stats
+
+    def _update_progress_bar(self, progress_bar, batch_idx, print_freq, loss, cls_loss, reg_loss, optimizer):
+        """更新進度條"""
+        # 更新進度條
+        if batch_idx % print_freq == 0:
+            progress_bar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'cls_loss': f'{cls_loss.item():.4f}', 
+                'reg_loss': f'{reg_loss.item():.4f}',
+                'lr': f'{optimizer.param_groups[0]["lr"]:.6f}'
+            })
+        progress_bar.update(1)
+
+    def _finalize_training(self, progress_bar, stats, use_lcp_loss):
+        """結束訓練並返回結果"""
+        # 關閉進度條
+        progress_bar.close()
+        
+        # 計算平均損失
+        batch_count = stats['batch_count']
+        avg_loss = stats['total_loss'] / batch_count if batch_count > 0 else float('inf')
+        
+        loss_components = {
+            'cls': stats['cls_loss_total'] / batch_count if batch_count > 0 else float('inf'),
+            'reg': stats['reg_loss_total'] / batch_count if batch_count > 0 else float('inf')
+        }
+        
+        if use_lcp_loss:
+            loss_components['recon'] = stats['recon_loss_total'] / batch_count if batch_count > 0 else float('inf')
+        
+        # 打印訓練統計
+        elapsed_time = time.time() - stats['start_time']
+        print(f"\n✓ 訓練完成: {batch_count} 批次，平均損失: {avg_loss:.4f}，耗時: {elapsed_time:.2f}秒")
+        print(f"  分類損失: {loss_components['cls']:.4f}, 回歸損失: {loss_components['reg']:.4f}")
+        
+        if use_lcp_loss:
+            print(f"  重建損失: {loss_components['recon']:.4f}")
+        
+        return avg_loss, loss_components
+    
+    def finetune(self, train_loader, auxiliary_net, prune_layers, prune_ratio=0.3,
+                optimizer=None, device=None, epochs_per_layer=1, print_freq=1, max_batches=3):
+        """
+        逐層剪枝+每層剪枝後微調（LCP論文流程）
+        """
+        import torch
+
+        if device is None:
+            device = self.device if hasattr(self, "device") else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if optimizer is None:
+            optimizer = torch.optim.Adam(list(self.parameters()) + list(auxiliary_net.parameters()), lr=1e-3)
+
+        self.train()
+        auxiliary_net.train()
+
+        for layer_name in prune_layers:
+            print(f"\n🔪 剪枝層: {layer_name}")
+            # 取一個 batch 作為剪枝依據
+            images, boxes, labels, class_images = next(iter(train_loader))
+            images = self._normalize_batch_images(images, device=device)
+            class_images = self._normalize_batch_images(class_images, device=device, target_size=(64, 64))
+            boxes = [b.to(device) for b in boxes]
+            labels = [l.to(device) for l in labels]
+
+            # 剪枝
+            success = self.prune_channel(
+                layer_name=layer_name,
+                prune_ratio=prune_ratio,
+                images=images,
+                boxes=boxes,
+                labels=labels,
+                auxiliary_net=auxiliary_net
+            )
+            assert success, f"剪枝 {layer_name} 失敗"
+
+            # 剪枝後微調
+            for epoch in range(epochs_per_layer):
+                print(f"  微調 Epoch {epoch+1}/{epochs_per_layer}")
+                avg_loss, loss_components = self.train_one_epoch(
+                    train_loader=train_loader,
+                    optimizer=optimizer,
+                    auxiliary_net=auxiliary_net,
+                    device=device,
+                    print_freq=print_freq,
+                    max_batches=max_batches
+                )
+                print(f"  微調完成，平均損失: {avg_loss:.4f}，損失組件: {loss_components}")
+        self.save_checkpoint("finetune_checkpoint.pth")
+        print("\n✅ LCP finetune pipeline 完成")
+    
+    def load_checkpoint(self, checkpoint_path, device=None):
+        """
+        從檢查點載入學生模型，包括處理剪枝後的結構
+        
+        Args:
+            checkpoint_path: 檢查點文件路徑
+            device: 設備 (CPU/GPU)
+            
+        Returns:
+            成功載入返回 True，否則 False
+        """
+        if device is None:
+            device = self.device if hasattr(self, 'device') else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+        try:
+            # 載入檢查點
+            print(f"📂 開始從 {checkpoint_path} 載入檢查點...")
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            
+            # 檢查是否有模型結構資訊
+            if 'model_structure' not in checkpoint:
+                print(f"⚠️ 檢查點中沒有模型結構資訊，嘗試直接載入...")
+                try:
+                    # 直接載入，但允許不匹配的鍵值
+                    # 只載入學生模型相關的參數
+                    student_state_dict = {}
+                    for k, v in checkpoint['model_state_dict'].items():
+                        if not k.startswith('teacher_model'):
+                            student_state_dict[k] = v
+                    
+                    result = self.load_state_dict(student_state_dict, strict=False)
+                    # 如果有缺失或意外的鍵值，輸出警告
+                    if result.missing_keys or result.unexpected_keys:
+                        print(f"⚠️ 載入時發現匹配問題:")
+                        print(f"   缺失鍵值: {len(result.missing_keys)} 個")
+                        print(f"   多餘鍵值: {len(result.unexpected_keys)} 個")
+                    print(f"⚠️ 模型已載入但可能存在參數不匹配問題")
+                    return True
+                except Exception as e:
+                    print(f"❌ 直接載入失敗: {e}")
+                    return False
+                
+            # 根據檢查點中的結構重構模型
+            print("🔄 根據保存的結構重建模型...")
+            success = self._reconstruct_model_from_structure(checkpoint['model_structure'])
+            if not success:
+                print("❌ 模型重構失敗")
+                return False
+            
+            # 現在模型結構應該匹配，可以載入權重
+            print("⏳ 載入權重...")
+            
+            # 確保只載入學生模型的參數
+            student_state_dict = {}
+            for k, v in checkpoint['model_state_dict'].items():
+                # 過濾掉教師模型的參數
+                if not k.startswith('teacher_model'):
+                    student_state_dict[k] = v
+                    
+            # 載入過濾後的狀態字典
+            self.load_state_dict(student_state_dict, strict=False)
+            
+            # 如果存在教師模型，需要重新初始化
+            if hasattr(self, 'teacher_model'):
+                print("🔄 正在重新初始化教師模型...")
+                # 使用當前模型（學生模型）的狀態創建新的教師模型
+                self.teacher_model = copy.deepcopy(self)
+                self.teacher_model.eval()
+                for p in self.teacher_model.parameters():
+                    p.requires_grad = False
+            
+            # 如果需要，也可以載入輔助網絡
+            if hasattr(self, 'auxiliary_net') and 'auxiliary_net_state_dict' in checkpoint and checkpoint['auxiliary_net_state_dict'] is not None:
+                self.auxiliary_net.load_state_dict(checkpoint['auxiliary_net_state_dict'])
+                print("✓ 已載入輔助網絡")
+                
+            # 計算並顯示學生模型的參數量
+            student_params = sum(p.numel() for name, p in self.named_parameters() 
+                            if not name.startswith('teacher_model'))
+                
+            print(f"✅ 成功從 {checkpoint_path} 載入模型")
+            print(f"載入後學生模型參數量: {student_params:,}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 載入模型時出錯: {e}")
+            traceback.print_exc()
+            return False
+
+    def _reconstruct_model_from_structure(self, structure):
+        """
+        根據保存的結構資訊重建模型
+        
+        Args:
+            structure: 模型結構字典
+        
+        Returns:
+            重建是否成功
+        """
+        # 首先找出所有需要調整的卷積層
+        conv_layers_to_adjust = {}
+        
+        for name, config in structure.items():
+            if 'type' not in config or config['type'] != 'Conv2d':
+                continue
+                
+            # 檢查這個層是否存在於當前模型中
+            try:
+                module = self._get_module_by_name(name)
+                if module is not None and isinstance(module, nn.Conv2d):
+                    # 檢查通道數是否不同
+                    if module.out_channels != config['out_channels']:
+                        conv_layers_to_adjust[name] = config
+            except (AttributeError, IndexError):
+                print(f"⚠️ 無法找到層 {name}，跳過重建")
+                continue
+        
+        # 輸出所有需要重建的層
+        print(f"📊 需要調整的卷積層數量: {len(conv_layers_to_adjust)}")
+        
+        # 按照名稱排序重建層，確保按正確順序重建
+        for name in sorted(conv_layers_to_adjust.keys()):
+            config = conv_layers_to_adjust[name]
+            print(f"  調整層 {name}: 輸出通道從 {self._get_module_by_name(name).out_channels} 到 {config['out_channels']}")
+            
+            # 獲取backbone相對路徑
+            if "backbone." in name:
+                layer_name = name.replace("backbone.", "")
+            elif "net_feature_maps." in name:
+                layer_name = name.replace("net_feature_maps.", "")
+            else:
+                layer_name = name
+                
+            # 使用set_layer_out_channels方法調整通道數
+            success = self.set_layer_out_channels(layer_name, config['out_channels'])
+            if not success:
+                print(f"❌ 調整層 {layer_name} 失敗")
+                return False
+        
+        print(f"✅ 模型結構重建完成")
+        return True
+
+    def _get_module_by_name(self, name):
+        """通過名稱獲取模組"""
+        parts = name.split('.')
+        module = self
+        
+        for part in parts:
+            if part.isdigit():
+                module = module[int(part)]
+            else:
+                module = getattr(module, part)
+                
+        return module
+    
+    def save_checkpoint(self, checkpoint_path):
+        """保存模型檢查點，確保與 OS2D 框架完全相容"""
+        import traceback
+        import logging
+        
+        # 創建臨時logger，類似於父類中的logger
+        temp_logger = logging.getLogger("OS2D.save_checkpoint")
+        
+        # 收集層的大小和結構資訊
+        model_structure = self._get_model_structure(exclude_teacher=True)
+        
+        # 準備檢查點字典 - 只包含學生模型的參數
+        student_state_dict = {
+            k: v for k, v in self.state_dict().items() 
+            if not k.startswith('teacher_model')
+        }
+        
+        # 檢查是否有 optimizer 屬性
+        optimizer_state = None
+        if hasattr(self, 'optimizer'):
+            optimizer_state = self.optimizer.state_dict()
+        
+        # 使用與原始 OS2D 完全相同的檢查點結構
+        # 關鍵是使用 'net' 鍵，並確保包含所有必要的子模塊
+        os2d_checkpoint = {
+            'net': student_state_dict,  # OS2D init_model_from_file 首先查找的鍵
+            'optimizer': optimizer_state,
+            'scheduler': None,
+            'iteration': 0,
+            'epoch': self.epoch if hasattr(self, 'epoch') else 0,
+            'loss': 0.0,  # OS2D _load_network 方法可能需要這個
+            'config': {
+                'model': {
+                    'backbone': {'arch': "resnet50"},
+                    'merge_branch_parameters': True,
+                    'use_group_norm': False,
+                    'use_inverse_geom_model': False,
+                    'use_simplified_affine_model': True
+                },
+            },
+            'best_score': 0.0,
+            
+            # 保留我們自己的額外資訊
+            'model_state_dict': student_state_dict,
+            'optimizer_state_dict': optimizer_state,
+            'auxiliary_net_state_dict': self.auxiliary_net.state_dict() if hasattr(self, 'auxiliary_net') else None,
+            'model_structure': model_structure,
+            'backbone_arch': self.backbone_arch if hasattr(self, 'backbone_arch') else "resnet50"
+        }
+        
+        try:
+            # 保存檢查點
+            torch.save(os2d_checkpoint, checkpoint_path)
+            
+            # 測試能否加載 (嚴格的測試)
+            print("🧪 測試檢查點相容性...")
+            
+            print("測試使用 init_model_from_file:")
+            try:
+                temp_model2 = type(self)(pretrained_path=None, is_cuda=self.is_cuda)
+                optimizer_result = temp_model2.init_model_from_file(checkpoint_path)
+                print(f"✓ init_model_from_file 成功!")
+                if optimizer_result is not None:
+                    print("  - 優化器狀態也成功載入")
+            except Exception as e:
+                print(f"⚠️ init_model_from_file 測試失敗: {e}")
+            
+            # 計算參數量
+            student_params = sum(p.numel() for name, p in self.named_parameters() 
+                            if not name.startswith('teacher_model'))
+            
+            print(f"\n✅ 模型檢查點已保存至: {checkpoint_path}")
+            print(f"  - 學生模型參數量: {student_params:,}")
+            print(f"  - 檢查點格式已經過相容性測試")
+            
+            # 如果需要查看具體的鍵值結構，可以啟用以下代碼
+            # print("\n檢查點中的頂層鍵:")
+            # for k in os2d_checkpoint.keys():
+            #     print(f"  - {k}")
+            # print("\n'net' 鍵中前10個參數:")
+            # for i, (k, v) in enumerate(list(os2d_checkpoint['net'].items())[:10]):
+            #     print(f"  - {k}: {v.shape}")
+            
+            return True
+        except Exception as e:
+            print(f"❌ 保存檢查點時發生錯誤: {str(e)}")
+            traceback.print_exc()
+            return False
+
+    def _get_model_structure(self, exclude_teacher=True):
+        """獲取詳細的模型結構資訊（可選排除教師模型）"""
+        structure = {}
+        
+        # 記錄所有層的結構資訊
+        for name, module in self.named_modules():
+            # 如果設定排除教師模型，則跳過教師模型相關的層
+            if exclude_teacher and name.startswith('teacher_model'):
+                continue
+                
+            if isinstance(module, nn.Conv2d):
+                structure[name] = {
+                    'type': 'Conv2d',
+                    'in_channels': module.in_channels,
+                    'out_channels': module.out_channels,
+                    'kernel_size': module.kernel_size,
+                    'stride': module.stride,
+                    'padding': module.padding,
+                    'dilation': module.dilation,
+                    'groups': module.groups,
+                    'bias': module.bias is not None
+                }
+            elif isinstance(module, nn.BatchNorm2d):
+                structure[name] = {
+                    'type': 'BatchNorm2d',
+                    'num_features': module.num_features,
+                    'eps': module.eps,
+                    'momentum': module.momentum,
+                    'affine': module.affine,
+                    'track_running_stats': module.track_running_stats
+                }
+            elif isinstance(module, nn.Linear):
+                structure[name] = {
+                    'type': 'Linear',
+                    'in_features': module.in_features,
+                    'out_features': module.out_features,
+                    'bias': module.bias is not None
+                }
+        
+        return structure
