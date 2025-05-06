@@ -303,7 +303,7 @@ class Os2dModel(nn.Module):
         try:
             if path:
                 self.logger.info("Reading model file {}".format(path))
-                checkpoint = torch.load(path)
+                checkpoint = torch.load(path , weights_only=False)
             else:
                 checkpoint = None
 
@@ -404,7 +404,7 @@ class Os2dModel(nn.Module):
             try:
                 self.logger.info("Trying to init affine transform from {}".format(init_affine_transform_path))
                 try:
-                    model_data = torch.load(init_affine_transform_path)
+                    model_data = torch.load(init_affine_transform_path, weights_only=False)
                 except:
                     self.logger.info("Could not read the model file {0}.".format(path))
                 assert hasattr(self, "os2d_head_creator") and hasattr(self.os2d_head_creator, "aligner") and hasattr(self.os2d_head_creator.aligner, "parameter_regressor"), "Need to have the affine regressor part to inialize it"
@@ -428,7 +428,7 @@ class Os2dModel(nn.Module):
         if model_data is None:
             try:
                 self.logger.info("Trying to init from {}".format(path))
-                model_data = torch.load(path)
+                model_data = torch.load(path, weights_only=False)
             except:
                 self.logger.info("Could not read the model file {0}. Starting from scratch.".format(path))
         else:

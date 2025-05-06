@@ -65,6 +65,7 @@ def build_eval_dataset(data_path, name, eval_scale, cache_images=False, no_image
             gtboxframe["difficult"] = 0
         gt_path = os.path.join(data_path, "paste", annotation_folder, "images")
         image_path = os.path.join(data_path, "paste", "src", "original")
+    
     else:
         raise(RuntimeError("Unknown dataset {0}".format(name)))
 

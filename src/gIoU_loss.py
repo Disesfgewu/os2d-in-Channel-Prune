@@ -33,8 +33,22 @@ class GIoULoss(nn.Module):
                 # 如果是 [N*4]，需要重塑為 [N, 4]
                 target_boxes = target_boxes.reshape(-1, 4)
                 
+        # 確保 pred_boxes 有正確的維度 [N, 4]
+        if len(pred_boxes.shape) == 1:
+            if pred_boxes.shape[0] == 4:  # 如果是單個邊界框 [4]
+                pred_boxes = pred_boxes.unsqueeze(0)  # 變成 [1, 4]
+            else:
+                # 如果是 [N*4]，需要重塑為 [N, 4]
+                pred_boxes = pred_boxes.reshape(-1, 4)
+        
+        # 確保 pred_boxes 只有4列
+        if pred_boxes.shape[1] > 4:
+            pred_boxes = pred_boxes[:, :4]
+                
         # 提取座標
         pred_x1, pred_y1, pred_x2, pred_y2 = pred_boxes.unbind(1)
+        pred_boxes = pred_boxes.reshape(-1, 4)
+                
         target_x1, target_y1, target_x2, target_y2 = target_boxes.unbind(1)
         
         # 計算面積

@@ -17,6 +17,11 @@ import tarfile
 from torchvision.models import resnet50
 import urllib.request
 import shutil
+from os2d.data.dataset import DatasetOneShotDetection
+from collections import namedtuple
+
+# Define FeatureMapSize class that was missing
+FeatureMapSize = namedtuple('FeatureMapSize', ['w', 'h'])
 # from channel_selector import *
 # from auxiliary_network import *
 # from check_point import *
@@ -32,18 +37,100 @@ VOC_CLASSES = [
     'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor'
 ]
 
-class VOCDataset(torch.utils.data.Dataset):
+class VOCDataset(DatasetOneShotDetection):
     # 添加靜態類變數以便測試可以訪問
     CLASSES = VOC_CLASSES
     
     def __init__(self, data_path, split='train', transform=None, target_transform=None, download=True, 
-                 random_seed=None, img_size=(224,224), class_mapping=None):
+                 random_seed=None, img_size=(224,224), class_mapping=None, eval_scale=1.0):
         # 如果需要下載且路徑不存在有效數據集，則下載
         if download:
             self.data_path = self._download_voc(data_path)
         else:
             self.data_path = self._resolve_data_root(data_path)
-            
+        
+        # 驗證資料集結構
+        self._fix_nested_path_structure()
+        if not self._validate_dataset_structure():
+            if download:
+                print(f"⚠️ 找不到有效的VOC資料集，嘗試下載...")
+                self.data_path = self._download_voc(data_path)
+                # 再次修正路徑結構以確保正確
+                self._fix_nested_path_structure()
+                if not self._validate_dataset_structure():
+                    raise FileNotFoundError(f"下載後的VOC資料集結構仍然無效: {self.data_path}")
+            else:
+                raise FileNotFoundError(f"無效的VOC資料集結構於 {self.data_path}，請設置 download=True 自動下載")
+        
+        # 創建一個空的DataFrame作為gtboxframe，包含所需的欄位
+        import pandas as pd
+        split_file = os.path.join(self.data_path, 'ImageSets/Main', f'{split}.txt')
+        with open(split_file, 'r') as f:
+            ids = [line.strip() for line in f if line.strip()]
+        
+        # 創建必要的DataFrame結構，包含所有父類別需要的列
+        gtboxframe = pd.DataFrame({
+            'image_id': ids,
+            'class_id': [0] * len(ids),
+            'class_name': [''] * len(ids),
+            'x0': [0] * len(ids),
+            'y0': [0] * len(ids),
+            'x1': [0] * len(ids),
+            'y1': [0] * len(ids),
+            # 新增父類別需要的列
+            'gtbboxid': range(len(ids)),
+            'imageid': ids,
+            'imagefilename': [f"{id}.jpg" for id in ids],
+            'classid': [0] * len(ids),
+            'classfilename': [''] * len(ids),
+            'lx': [0] * len(ids),
+            'ty': [0] * len(ids),
+            'rx': [0] * len(ids),
+            'by': [0] * len(ids),
+            'difficult': [0] * len(ids)
+        })
+        
+        # Call the parent class's __init__ to set up all required attributes
+        super().__init__(
+            gtboxframe=gtboxframe,  # 使用我們創建的DataFrame
+            gt_path=os.path.join(self.data_path, "JPEGImages"),  # 改為JPEGImages因為父類別將此路徑用於讀取圖像
+            image_path=os.path.join(self.data_path, "JPEGImages"),
+            name=f"VOC2007-{split}",
+            image_size=img_size,
+            eval_scale=eval_scale,
+            cache_images=False,  # We implement our own caching
+            no_image_reading=True,  # 設為True以避免父類別嘗試讀取圖片
+            image_ids=ids,  # Set our IDs from split files
+            image_file_names=[f"{id}.jpg" for id in ids],
+            logger_prefix="VOC"
+        )
+        # Initialize DatasetOneShotDetection attributes to prevent attribute errors
+        self.image_path_per_image_id = {}
+        self.image_size_per_image_id = {}
+        self.image_per_image_id = {}
+        self.data_augmentation = None
+        self.num_images = len(ids)
+        self.num_boxes = len(self.samples) if hasattr(self, 'samples') else 0
+        self.num_classes = len(VOC_CLASSES)
+
+        # Store metadata for each image based on annotations
+        for img_id in ids:
+            img_path = os.path.join(self.data_path, 'JPEGImages', f'{img_id}.jpg')
+            if os.path.isfile(img_path):
+                # Get image size information
+                try:
+                    img = Image.open(img_path)
+                    self.image_size_per_image_id[img_id] = FeatureMapSize(w=img.width, h=img.height)
+                    self.image_path_per_image_id[img_id] = img_path
+                    if self.cache_images:
+                        self.image_per_image_id[img_id] = img
+                    else:
+                        img.close()
+                except Exception as e:
+                    print(f"⚠️ Error loading image {img_path}: {e}")
+        # 初始化我們自己的屬性而不是呼叫父類的初始化方法
+        self.eval_scale = eval_scale
+        # 父類需要的屬性將在我們的方法中實現
         self.split = split
         self.transform = transform
         self.target_transform = target_transform
@@ -68,6 +155,11 @@ class VOCDataset(torch.utils.data.Dataset):
         
         self._verify_split_files()
         self._precache_metadata()
+        print(f"📦 載入 VOC2007 {split}集: {len(self.samples)} 個樣本 (快取版)")
+        
+        # 初始化gt_images_per_classid屬性，這是os2d dataloader需要的
+        # 移動到_precache_metadata後，確保samples已經被填充
+        self.gt_images_per_classid = {class_id: self._create_class_image(class_id) for class_id in range(len(VOC_CLASSES))}
         print(f"📦 載入 VOC2007 {split}集: {len(self.samples)} 個樣本 (快取版)")
 
     def _download_voc(self, path):
@@ -130,24 +222,42 @@ class VOCDataset(torch.utils.data.Dataset):
 
     def _resolve_data_root(self, data_root):
         """自動修正 VOCdevkit 路徑"""
+        # 使用正規化的路徑分隔符
         potential_paths = [
             data_root,
-            os.path.join(data_root, 'VOCdevkit/VOC2007'),
+            os.path.join(data_root, 'VOCdevkit', 'VOC2007'),
             os.path.join(data_root, 'VOC2007'),
-            os.path.join(data_root, 'VOCdevkit/VOCdevkit/VOC2007')
+            os.path.join(data_root, 'VOCdevkit', 'VOCdevkit', 'VOC2007')
         ]
         for path in potential_paths:
-            if os.path.exists(os.path.join(path, 'Annotations')):
-                print(f"🔍 偵測到有效資料集路徑: {path}")
+            if os.path.exists(os.path.join(path, 'Annotations')) and os.path.exists(os.path.join(path, 'JPEGImages')):
                 return path
         return data_root
-
     def _fix_nested_path_structure(self):
-        if 'VOCdevkit/VOCdevkit' in self.data_path:
-            corrected = self.data_path.replace('VOCdevkit/VOCdevkit', 'VOCdevkit')
+        # 處理 Windows 和 Unix 風格路徑的嵌套問題
+        if 'VOCdevkit/VOCdevkit' in self.data_path.replace('\\', '/'):
+            corrected = self.data_path.replace('VOCdevkit/VOCdevkit', 'VOCdevkit').replace('VOCdevkit\\VOCdevkit', 'VOCdevkit')
             if os.path.exists(corrected):
                 print(f"🛠️ 自動修正嵌套路徑: {self.data_path} → {corrected}")
                 self.data_path = corrected
+                
+        # 檢查 Annotations 路徑是否有重複的 VOCdevkit
+        annotations_path = os.path.join(self.data_path, 'Annotations')
+        if not os.path.exists(annotations_path) and 'VOCdevkit' in self.data_path:
+            # 嘗試修正路徑
+            parent_dir = os.path.dirname(self.data_path)
+            if os.path.exists(os.path.join(parent_dir, 'Annotations')):
+                print(f"🛠️ 自動修正無效路徑: {self.data_path} → {parent_dir}")
+                self.data_path = parent_dir
+        
+        # 確保路徑末尾沒有斜線
+        if self.data_path.endswith('/') or self.data_path.endswith('\\'):
+            self.data_path = self.data_path[:-1]
+            print(f"🛠️ 自動修正路徑結尾斜線: {self.data_path}")
+        # 確保路徑末尾沒有斜線
+        if self.data_path.endswith('/') or self.data_path.endswith('\\'):
+            self.data_path = self.data_path[:-1]
+            print(f"🛠️ 自動修正路徑結尾斜線: {self.data_path}")
 
     def _validate_dataset_structure(self):
         required_dirs = ['Annotations', 'JPEGImages', 'ImageSets/Main']
@@ -166,6 +276,10 @@ class VOCDataset(torch.utils.data.Dataset):
     def _precache_metadata(self):
         """並行預載所有標註資料到記憶體"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        import tarfile
+        import os
+        from collections import OrderedDict
+        import pandas as pd
 
         split_file = os.path.join(self.data_path, 'ImageSets/Main', f'{self.split}.txt')
         with open(split_file, 'r') as f:
@@ -349,12 +463,39 @@ class VOCDataset(torch.utils.data.Dataset):
         # 返回圖像、目標框、類別標籤和類別圖像
         return img, boxes, labels, class_images
 
-    def __len__(self):
-        return len(self.samples)
-        
+    def _create_class_image(self, class_id):
+        """為每個類別創建一個代表性圖像"""
+        class_name = VOC_CLASSES[class_id]
+        # 尋找該類別的一個實例
+        for img_id in self.samples:
+            _, boxes, labels = self.cache[img_id]
+            if class_id in labels:
+                # 找到類別實例，創建代表性圖像
+                img_path = os.path.join(self.data_path, 'JPEGImages', f'{img_id}.jpg')
+                img = Image.open(img_path).convert('RGB')
+                img = np.array(img)
+                
+                # 找出該類別的第一個實例的框
+                idx = labels.index(class_id) if isinstance(labels, list) else (labels == class_id).nonzero(as_tuple=True)[0][0].item()
+                box = boxes[idx]
+                
+                # 裁剪區域
+                x1, y1, x2, y2 = box if isinstance(box, list) else box.tolist()
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                class_img = img[y1:y2, x1:x2]
+                
+                # 轉換為tensor並調整大小為64x64
+                class_img = torch.from_numpy(class_img).permute(2, 0, 1).float() / 255.0
+                class_img = F.interpolate(class_img.unsqueeze(0), size=(64, 64), mode='bilinear', align_corners=False).squeeze(0)
+                return class_img
+                
+        # 如果找不到實例，返回一個空白圖像
+        blank_img = torch.zeros(3, 64, 64)
+        return blank_img
+
     @staticmethod
     def collate_fn(batch):
-        """自定義批次整合函數，將主圖像resize為224×224，類別圖像resize為64×64（或224×224），並組成batch"""
+        """自定義批次整合函數，處理主圖像和類別圖像，確保類別圖像為PIL.Image格式"""
         images = []
         boxes_list = []
         labels_list = []
@@ -371,21 +512,25 @@ class VOCDataset(torch.utils.data.Dataset):
             boxes_list.append(boxes)
             labels_list.append(labels)
 
-            # 保證每個 class image 為 [N, 3, 64, 64] 或 [N, 3, 224, 224]
-            resized_class_images = []
-            for cimg in class_images:
-                if cimg.shape[1:] != (64, 64):  # 你也可以用 (224, 224)
-                    cimg = torch.nn.functional.interpolate(
-                        cimg.unsqueeze(0), size=(64, 64), mode='bilinear', align_corners=False
-                    ).squeeze(0)
-                resized_class_images.append(cimg)
-            # 堆疊
-            resized_class_images = torch.stack(resized_class_images)
-            class_images_list.append(resized_class_images)
+            # 將tensor類別圖像轉換為PIL.Image格式
+            batch_pil_class_images = []
+            for class_tensor in class_images:
+                # 轉換為PIL圖像
+                # 首先確保格式為[C, H, W]並改為[H, W, C]
+                np_img = class_tensor.permute(1, 2, 0).mul(255).byte().numpy()
+                pil_img = Image.fromarray(np_img)
+                
+                # 確保尺寸為64x64
+                if pil_img.size != (64, 64):
+                    pil_img = pil_img.resize((64, 64), Image.BILINEAR)
+                
+                batch_pil_class_images.append(pil_img)
+            
+            class_images_list.extend(batch_pil_class_images)
 
         # 組 batch
         images = torch.stack(images)  # [B, 3, 224, 224]
-        # 類別圖像合併成一個大 tensor [sum_N, 3, 64, 64]
-        all_class_images = torch.cat(class_images_list, dim=0)
+        
+        # 注意: class_images_list 現在是 PIL.Image 列表，不需要 stack
 
-        return [images, boxes_list, labels_list, all_class_images]
+        return [images, boxes_list, labels_list, class_images_list]

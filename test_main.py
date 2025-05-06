@@ -12,13 +12,10 @@ def test_empty():
 
 def run_all_tests():
     tests = [
-        # ("VOC Dataset test_init_and_len 測試", test_init_and_len),
-        # ("VOC Dataset test_getitem 測試", test_getitem_single),
-        # ("VOC Dataset test_collate_fn 測試", test_collate_fn_batch),
-        # ("VOC Dataset test_getitem_with_different_batch_formats 測試", test_collate_fn_batch),
-        # ("VOC Dataset test_collate_fn_with_different_batch_formats 測試", test_class_image_generation),
-        # ("VOC Dataset test_img_size_resize 測試", test_img_size_resize),
-        # ("VOC Class Mapping 測試", test_class_mapping),
+        # ("Grozi Dataset 測試", test_grozi_dataset),
+        # ("OS2D Dataset 測試", test_os2d_dataset),
+        # ("OS2D Dataloader 測試", test_os2d_dataloader),
+
         # ( "OS2D 模型初始化測試", test_os2d_model_in_prune_initialization),
         # ( "OS2D Set Channel 測試", test_set_layer_out_channels),
         # ( "OS2D 模型前向傳播測試", test_os2d_model_in_prune_forward),
@@ -43,18 +40,21 @@ def run_all_tests():
         # ("AuxiliaryNetwork 前向傳播測試", test_forward_pass),
         # ("AuxiliaryNetwork 更新通道測試", test_update_input_channels),
         
-        # ("ContextualRoIAlign 測試1", test_forward),
-        # ("ContextualRoIAlign 測試2", test_empty_boxes),
-        
+        ("ContextualRoIAlign 測試1", test_forward),
+        ("ContextualRoIAlign 測試2", test_empty_boxes),
+        ("ContextualRoIAlign All Case 測試" , test_contextual_roi_align_all_cases ),
+
         # ("LCP 通道選擇器測試", test_lcp_channel_selector),
         # ("LCP 通道選擇器特徵圖測試", test_feature_map_extraction ),
         # ("通道重要性計算測試", test_channel_importance_computation),
         
-        # ("完整剪枝流程測試", test_lcp_finetune_pipeline ),
-        # ("訓練函數 basic 測試" , test_train_one_epoch_basic ),
-        # ("完整 LCP 剪枝 pippline+train 測試", test_lcp_prune_and_train_pipeline),
+        ("訓練函數 basic 測試" , test_train_one_epoch_basic ),
+        # ("Finetune 測試", test_lcp_finetune_pipeline ),
         # ("Save Checkpoint 測試", test_save_checkpoint),
-        ("OS2D 框架相容性測試", test_os2d_compatibility_with_pruned_model),
+        # ("Eval 測試" , test_os2d_model_in_prune_eval),
+        # ("OS2D 框架相容性測試", test_os2d_compatibility_with_pruned_model),
+        # ("完整 LCP 剪枝 pippline+train 測試", test_lcp_prune_and_train_pipeline),
+        # ("完整 pipeline 測試", test_full_lcp_pipeline_with_eval_and_checkpoint ),
     ]
 
     results = []
