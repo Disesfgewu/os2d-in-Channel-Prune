@@ -2,7 +2,7 @@ import os
 import torch
 import torchvision
 import pytest
-import traceback
+# import # traceback
 import numpy as np
 import unittest
 from torch.utils.data import DataLoader
@@ -267,7 +267,7 @@ def test_os2d_model_in_prune_forward():
     if not os.path.exists(os2d_path):
         pytest.skip(f"OS2D 預訓練模型不存在: {os2d_path}")
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
     model = Os2dModelInPrune(logger=logger, pretrained_path=os2d_path, is_cuda=(device.type == 'cuda'))
     model = model.to(device)
     
@@ -299,7 +299,7 @@ def test_os2d_model_in_prune_channel():
     if not os.path.exists(os2d_path):
         pytest.skip(f"OS2D 預訓練模型不存在: {os2d_path}")
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
     model = Os2dModelInPrune(logger=logger, pretrained_path=os2d_path, is_cuda=(device.type == 'cuda'))
     model = model.to(device)
     
@@ -362,7 +362,7 @@ def test_forward_pass_with_class_images():
     """Test forward pass with class_images parameter"""
     try:
         # Setup device
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         
         # Initialize model
         os2d_path = "./os2d_v2-train.pth"
@@ -390,14 +390,14 @@ def test_forward_pass_with_class_images():
             
     except Exception as e:
         print(f"❌ Test failed: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_set_layer_out_channels():
     """測試 set_layer_out_channels 方法"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -479,8 +479,8 @@ def test_set_layer_out_channels():
         return True
     except Exception as e:
         print(f"❌ set_layer_out_channels 測試失敗: {e}")
-        import traceback
-        traceback.print_exc()
+        # import # traceback
+        # traceback.print_exc()
         return False
 
 def _test_all_layer_channel_consistency(model):
@@ -548,7 +548,7 @@ def test_cross_block_residual_connection():
     """測試跨塊殘差連接保護機制"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -640,14 +640,14 @@ def test_cross_block_residual_connection():
         return True
     except Exception as e:
         print(f"❌ 跨塊殘差連接保護測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_load_os2d_weights():
     """測試 OS2D 模型載入權重"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         
         # 初始化模型
         os2d_path = "./os2d_v2-train.pth"
@@ -668,14 +668,14 @@ def test_load_os2d_weights():
         return True
     except Exception as e:
         print(f"❌ OS2D 模型測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
     
 def test_get_feature_map():
     """測試 OS2D 特徵圖提取功能"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         
         # 初始化模型
         os2d_path = "./os2d_v2-train.pth"
@@ -713,14 +713,14 @@ def test_get_feature_map():
         return True
     except Exception as e:
         print(f"❌ OS2D 特徵圖測試失敗: {e}")
-        traceback.print.exc()
+        # traceback.print.exc()
         return False
 
 def test_prune_block_with_downsample():
     """測試剪枝帶有 downsample 的塊"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
 
         # 初始化模型
@@ -789,14 +789,14 @@ def test_prune_block_with_downsample():
 
     except Exception as e:
         print(f"❌ 含 downsample 塊剪枝測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_prune_channel():
     """測試 OS2D 單層通道剪枝功能"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -860,14 +860,14 @@ def test_prune_channel():
         return True
     except Exception as e:
         print(f"❌ OS2D prune channel 測試失敗: {e}")
-        # traceback.print.exc()
+        # # traceback.print.exc()
         return False
         
 def test_residual_connection_protection():
     """測試殘差連接保護機制"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -965,14 +965,14 @@ def test_residual_connection_protection():
         return True
     except Exception as e:
         print(f"❌ 殘差連接保護測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_residual_connection_pre_post_pruning():
     """測試殘差連接剪枝前後的層間關係"""
     try:
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1044,14 +1044,14 @@ def test_residual_connection_pre_post_pruning():
         return True
     except Exception as e:
         print(f"❌ 殘差連接剪枝前後關係測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_continuous_blocks_pruning():
     """測試連續多個塊的剪枝"""
     try:
         # 設置設備 
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1113,14 +1113,14 @@ def test_continuous_blocks_pruning():
         
     except Exception as e:
         print(f"❌ 連續塊剪枝測試失敗: {e}")
-        traceback.print.exc()  
+        # traceback.print.exc()  
         return False
 
 def test_prune_conv1_only():
     """測試只剪枝 conv1 層"""
     try:
         # 設置設備
-        device = 'cpu'
+        device = 'cuda' if torch.cuda.is_available() else 'cuda'
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1214,13 +1214,13 @@ def test_prune_conv1_only():
         
     except Exception as e:
         print(f"❌ Conv1 剪枝測試失敗: {e}")
-        traceback.print.exc()
+        # # traceback.print.exc()
         return False
 
 def test_prune_conv2_only():
     """測試只剪枝 conv2 層"""
     try:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1313,13 +1313,13 @@ def test_prune_conv2_only():
         
     except Exception as e:
         print(f"❌ Conv2 剪枝測試失敗: {e}")
-        traceback.print.exc()
+        # # traceback.print.exc()
         return False
 
 def test_prune_conv3_only():
     """測試只剪枝 conv3 層(包含殘差連接)"""
     try:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1422,13 +1422,13 @@ def test_prune_conv3_only():
         
     except Exception as e:
         print(f"❌ Conv3 剪枝測試失敗: {e}")
-        traceback.print.exc()
+        # traceback.print.exc()
         return False
 
 def test_continuous_block_pruning():
     """測試連續剪枝整個殘差塊"""
     try:
-        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型
@@ -1523,13 +1523,13 @@ def test_continuous_block_pruning():
         
     except Exception as e:
         print(f"❌ 連續塊剪枝測試失敗: {e}")
-        traceback.print.exc()  
+        # traceback.print.exc()  
         return False
 
 def test_prune_multiple_blocks():
     """測試連續剪多個 block"""
     try:
-        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"\n===== 測試連續剪多個 block =====")
         print(f"使用設備: {device}")
         
@@ -1596,13 +1596,13 @@ def test_prune_multiple_blocks():
         
     except Exception as e:
         print(f"❌ 連續剪多個 block 測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_cross_stage_prune():
     """測試跨 stage 剪枝"""
     try:
-        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"\n===== 測試跨 stage 剪枝 =====")
         print(f"使用設備: {device}")
         
@@ -1664,13 +1664,13 @@ def test_cross_stage_prune():
         
     except Exception as e:
         print(f"❌ 跨 stage 剪枝測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_resnet18_basicblock_prune():
     """測試 ResNet18/34 BasicBlock 剪枝"""
     try:
-        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"\n===== 測試 ResNet18 BasicBlock 剪枝 =====")
         print(f"使用設備: {device}")
         
@@ -1727,13 +1727,13 @@ def test_resnet18_basicblock_prune():
         
     except Exception as e:
         print(f"❌ ResNet18 BasicBlock 剪枝測試失敗: {e}")
-        traceback.print.exc()
+        # traceback.print.exc()
         return False
 
 def test_pruning_ratios(layer_name, model_fn=None):
     """測試不同剪枝率對指定層的影響"""
     try:
-        device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"\n===== 測試剪枝率 sweep {layer_name} =====")
         print(f"使用設備: {device}")
         
@@ -1815,7 +1815,7 @@ def test_lcp_channel_selector():
         print("\n===== LCP 通道選擇器測試 =====")
         
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型與路徑
@@ -1849,7 +1849,7 @@ def test_lcp_channel_selector():
         
     except Exception as e:
         print(f"❌ LCP 通道選擇器測試失敗: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
 
 def test_channel_importance_computation():
@@ -1858,7 +1858,7 @@ def test_channel_importance_computation():
         print("\n===== 通道重要性計算測試 =====")
         
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型與路徑
@@ -1924,7 +1924,7 @@ def test_channel_importance_computation():
         
     except Exception as e:
         print(f"❌ 通道重要性計算測試失敗: {e}")
-        # traceback.print_exc()
+        # # traceback.print_exc()
         return False
     
 def test_lcp_finetune_pipeline():
@@ -1936,7 +1936,7 @@ def test_feature_map_extraction():
         print("\n===== 測試特徵圖提取功能 =====")
         
         # 設置設備
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cuda')
         print(f"使用設備: {device}")
         
         # 初始化模型和路徑
@@ -2111,16 +2111,311 @@ def test_feature_map_extraction():
         
     except Exception as e:
         print(f"❌ 特徵圖提取測試發生錯誤: {e}")
-        traceback.print_exc()
+        # traceback.print_exc()
         return False
     
 def test_train_one_epoch_basic():
     """
     Memory-friendly 單元測試：驗證 OS2D 模型在 Grozi-3.2k mini set 上能正確 train_one_epoch
+    並打印詳細的數據集和輸入參數信息
     """
+    from src.os2d_model_in_prune import Os2dModelInPrune
+    from src.auxiliary_network import AuxiliaryNetwork
+    from os2d.data.dataset import build_grozi_dataset
+    from os2d.data.dataloader import DataloaderOneShotDetection
+    from os2d.modeling.box_coder import Os2dBoxCoder, BoxGridGenerator
+    from os2d.structures.feature_map import FeatureMapSize
     import os
     import torch
     import pytest
+    import numpy as np
+    import traceback
+    import logging
+
+    # 設置詳細的日誌
+    logging.basicConfig(level=logging.INFO, 
+                      format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger("OS2D.test")
+    logger.info("===== 開始詳細測試 OS2D 訓練管道 =====")
+
+    # 1. 檢查 Grozi dataset 是否存在
+    data_path = "./data"
+    grozi_csv = os.path.join(data_path, "grozi", "classes", "grozi.csv")
+    if not os.path.exists(grozi_csv):
+        logger.error("❌ Grozi-3.2k dataset not found. 請依官方說明手動下載並解壓至 ./data/grozi/")
+        pytest.skip("Grozi-3.2k dataset missing, test skipped.")
+        return False
+
+    # 2. 建立 dataset/dataloader（mini subset + batch size 1）
+    logger.info("正在載入 Grozi-3.2k mini dataset...")
+    dataset = build_grozi_dataset(
+        data_path=data_path,
+        name="grozi-train-mini",  # 只取2張圖2類別
+        eval_scale=224,
+        cache_images=False
+    )
+    
+    # 打印數據集基本信息
+    class_ids = dataset.get_class_ids()
+    logger.info(f"數據集信息: {dataset.get_name()}")
+    logger.info(f"總圖像數量: {len(dataset.image_ids)}")
+    logger.info(f"類別數量: {len(class_ids)}")
+    logger.info(f"類別 ID 列表: {class_ids}")
+    
+    # 查看第一張圖的標註信息
+    if len(dataset.image_ids) > 0:
+        image_id = dataset.image_ids[0]
+        boxes = dataset.get_image_annotation_for_imageid(image_id)
+        if hasattr(boxes, "bbox_xyxy"):
+            logger.info(f"第一張圖 ({image_id}) 的標註框: shape={boxes.bbox_xyxy.shape}, 內容={boxes.bbox_xyxy}")
+            if hasattr(boxes, "get_field"):
+                if "labels" in boxes.fields():
+                    logger.info(f"框對應的標籤: {boxes.get_field('labels')}")
+    
+    # 創建 box_coder
+    box_coder = Os2dBoxCoder(
+        positive_iou_threshold=0.5,
+        negative_iou_threshold=0.4,
+        remap_classification_targets_iou_pos=0.5,
+        remap_classification_targets_iou_neg=0.4,
+        output_box_grid_generator=BoxGridGenerator(
+            box_size=FeatureMapSize(w=16, h=16),
+            box_stride=FeatureMapSize(w=16, h=16)
+        ),
+        function_get_feature_map_size=lambda img_size: FeatureMapSize(w=img_size.w // 16, h=img_size.h // 16),
+        do_nms_across_classes=False
+    )
+    
+    logger.info("創建 DataloaderOneShotDetection...")
+    train_loader = DataloaderOneShotDetection(
+        dataset=dataset,
+        box_coder=box_coder,
+        batch_size=1,  # 最小 batch
+        img_normalization={"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+        gt_image_size=64,
+        random_flip_batches=False,
+        random_crop_size=None,
+        random_color_distortion=False,
+        pyramid_scales_eval=[1.0],
+        do_augmentation=False
+    )
+    logger.info(f"DataLoader 長度: {len(train_loader)} batches")
+
+    # 檢查第一個 batch 的具體結構
+    logger.info("檢查第一個批次 (batch) 的結構...")
+    batch = train_loader.get_batch(0)
+    images, class_images, loc_targets, class_targets, batch_class_ids, class_image_sizes, box_inverse_transform, batch_boxes, batch_img_size = batch
+    
+    # 打印詳細的 batch 結構信息
+    logger.info(f"批次結構:")
+    logger.info(f"  - images: 形狀={images.shape}, 類型={images.dtype}, 設備={images.device}")
+    logger.info(f"  - class_images: 數量={len(class_images)}, 類型={type(class_images[0]) if class_images else 'N/A'}")
+    if class_images and isinstance(class_images[0], torch.Tensor):
+        logger.info(f"    - 第一個 class_image: 形狀={class_images[0].shape}, 類型={class_images[0].dtype}")
+    logger.info(f"  - loc_targets: 形狀={loc_targets.shape}, 類型={loc_targets.dtype}")
+    logger.info(f"  - class_targets: 形狀={class_targets.shape}, 類型={class_targets.dtype}")
+    logger.info(f"    - class_targets 值范圍: min={class_targets.min().item()}, max={class_targets.max().item()}")
+    logger.info(f"  - batch_class_ids: 類型={type(batch_class_ids)}, 數量={len(batch_class_ids) if isinstance(batch_class_ids, list) else 'N/A'}")
+    if isinstance(batch_class_ids, list) and len(batch_class_ids) > 0:
+        logger.info(f"    - 第一個 batch_class_id: 形狀={batch_class_ids[0].shape if hasattr(batch_class_ids[0], 'shape') else '()'}, 值={batch_class_ids[0]}")
+    logger.info(f"  - class_image_sizes: {class_image_sizes}")
+    logger.info(f"  - batch_boxes: 類型={type(batch_boxes)}, 數量={len(batch_boxes) if isinstance(batch_boxes, list) else 'N/A'}")
+    
+    # 修正這裡，正確處理 BoxList 對象
+    if isinstance(batch_boxes, list) and len(batch_boxes) > 0:
+        box = batch_boxes[0]
+        if hasattr(box, 'bbox_xyxy'):  # BoxList 對象
+            logger.info(f"    - 第一個 batch_box: BoxList對象, 框數量={box.bbox_xyxy.shape[0]}")
+            logger.info(f"    - bbox_xyxy 形狀={box.bbox_xyxy.shape}, 包含 {box.bbox_xyxy.shape[0]} 個框")
+            if hasattr(box, 'get_field') and "labels" in box.fields():
+                logger.info(f"    - 標籤: {box.get_field('labels')}")
+        elif hasattr(box, 'shape'):  # Tensor
+            logger.info(f"    - 第一個 batch_box: 形狀={box.shape}, 值={box}")
+        else:
+            logger.info(f"    - 第一個 batch_box: 類型={type(box)}, 值={box}")
+            
+    logger.info(f"  - batch_img_size: {batch_img_size}")
+
+    # 3. 初始化模型與優化器（用 CPU 以節省資源）
+    device = torch.device('cpu')
+    logger.info(f"使用設備: {device}")
+    
+    os2d_path = "./os2d_v2-train.pth"
+    if not os.path.exists(os2d_path):
+        logger.error(f"OS2D 預訓練模型不存在: {os2d_path}")
+        pytest.skip(f"OS2D 預訓練模型不存在: {os2d_path}")
+        return False
+    
+    logger.info(f"載入 OS2D 模型: {os2d_path}")
+    model = Os2dModelInPrune(pretrained_path=os2d_path, is_cuda=False).to(device)
+    
+    # 檢查模型結構
+    logger.info("檢查模型結構:")
+    param_count = sum(p.numel() for p in model.parameters())
+    logger.info(f"  - 總參數量: {param_count:,}")
+    logger.info(f"  - backbone 型別: {type(model.backbone).__name__}")
+    
+    # 初始化輔助網路
+    logger.info("初始化輔助網路")
+    aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+    
+    # 檢查並打印模型的特徵圖輸出大小
+    logger.info("檢查特徵圖尺寸:")
+    with torch.no_grad():
+        feature_maps = model.get_feature_map(images.to(device))
+        if isinstance(feature_maps, torch.Tensor):
+            logger.info(f"  - 特徵圖形狀: {feature_maps.shape}")
+            logger.info(f"  - 特徵圖值範圍: [{feature_maps.min().item():.4f}, {feature_maps.max().item():.4f}]")
+            # 計算特徵圖如果被完全展平後的大小
+            flattened_size = feature_maps.shape[0] * feature_maps.shape[1] * feature_maps.shape[2] * feature_maps.shape[3]
+            logger.info(f"  - 特徵圖完全展平後大小: {flattened_size} (這可能導致類別數量異常)")
+    
+    # 初始化優化器
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(aux_net.parameters()), lr=1e-3)
+    logger.info("初始化 Adam 優化器，學習率=1e-3")
+
+    # 4. 執行一個 epoch 的訓練（只跑一個 batch）
+    logger.info("開始執行 train_one_epoch (只執行一個 batch)...")
+    try:
+        logger.info(f"類別數量: {len(train_loader.dataset.get_class_ids())}")
+        loss_history = model.train_one_epoch(
+            train_loader=train_loader,
+            optimizer=optimizer,
+            auxiliary_net=aux_net,
+            device=device,
+            print_freq=1,  
+            max_batches=1  
+        )
+    except NotImplementedError:
+        logger.error("⚠️ train_one_epoch 尚未實作，請先完成實作。")
+        assert False, "train_one_epoch 尚未實作"
+        return False
+    except Exception as e:
+        logger.error(f"❌ 執行 train_one_epoch 發生例外: {e}")
+        logger.error(traceback.format_exc())
+        assert False, f"train_one_epoch 執行失敗: {e}"
+        return False
+
+    # 5. 驗證 loss 是否合理
+    if isinstance(loss_history, list) and len(loss_history) > 0:
+        avg_loss = np.mean(loss_history)
+        logger.info(f"✅ train_one_epoch 執行成功，平均 loss={avg_loss:.4f}")
+        assert np.isfinite(avg_loss), "loss 應為有限數值"
+    else:
+        logger.warning("⚠️ train_one_epoch 未回傳 loss 歷史，請檢查實作")
+        assert False, "train_one_epoch 未回傳 loss 歷史"
+
+    # 6. 驗證參數是否有更新
+    orig_params = [p.clone().detach() for p in model.parameters()]
+    model.train_one_epoch(
+        train_loader=train_loader,
+        optimizer=optimizer,
+        auxiliary_net=aux_net,
+        device=device,
+        print_freq=0,
+        max_batches=1
+    )
+    updated_params = [p.clone().detach() for p in model.parameters()]
+    changed = any(not torch.equal(a, b) for a, b in zip(orig_params, updated_params))
+    assert changed, "模型參數未更新，請檢查 optimizer/backward 實作"
+    
+    logger.info("✅ train_one_epoch 參數更新檢查通過")
+    logger.info("🎉 test_train_one_epoch_basic: OS2D 單 batch 微調訓練測試通過")
+    return True
+
+def test_lcp_prune_and_train_pipeline():
+    pass
+
+def test_save_checkpoint():
+    pass
+
+def get_conv_structure(model):
+    return [(name, m.in_channels, m.out_channels, m.kernel_size)
+            for name, m in model.backbone.named_modules() if isinstance(m, torch.nn.Conv2d)]
+
+def test_os2d_compatibility_with_pruned_model():
+    pass
+
+def test_compute_losses():
+    """測試 compute_losses 函數"""
+    # 初始化模型和輔助網路
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = Os2dModelInPrune(pretrained_path="./os2d_v2-train.pth", is_cuda=(device.type == 'cuda')).to(device)
+    aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
+    
+    # 設置為訓練模式
+    model.train()
+    aux_net.train()
+    
+    # 創建模擬輸入
+    batch_size = 2
+    num_classes = 20
+    class_images = [torch.randn(3, 64, 64).to(device) for _ in range(batch_size)]
+    images = torch.randn(batch_size, 3, 224, 224, requires_grad=True).to(device)
+    class_scores = torch.randn(batch_size, num_classes, requires_grad=True).to(device)
+    boxes = torch.randn(batch_size, 4, requires_grad=True).to(device)
+    
+    # 模擬 outputs
+    outputs = {
+        'class_scores': class_scores,
+        'boxes': boxes,
+        'images': images,
+        'class_images': class_images
+    }
+    
+    # 執行教師模型前向傳播
+    with torch.no_grad():
+        teacher_outputs = model.teacher_model(images, class_images=class_images)
+        print(f"教師模型輸出類型: {type(teacher_outputs)}")
+        if isinstance(teacher_outputs, dict):
+            print(f"教師模型輸出鍵: {teacher_outputs.keys()}")
+        elif isinstance(teacher_outputs, tuple):
+            print(f"教師模型輸出長度: {len(teacher_outputs)}")
+    
+    # 模擬 targets
+    class_ids = [torch.tensor([1]), torch.tensor([2])]
+    target_boxes = [torch.randn(1, 4).to(device), torch.randn(1, 4).to(device)]
+    targets = {
+        'class_ids': class_ids,
+        'boxes': target_boxes,
+        'images': images,
+        'teacher_outputs': teacher_outputs  # 添加教師模型輸出
+    }
+    
+    # 計算損失
+    total_loss, loss_dict = model.compute_losses(outputs, targets, auxiliary_net=aux_net)
+    
+    # 檢查損失值是否合理
+    print(f"總損失: {total_loss.item():.4f}")
+    print(f"損失字典: {loss_dict}")
+    print(f"cls loss :{loss_dict['cls_loss'].item()}")
+    print(f"box loss :{loss_dict['box_loss'].item()}")
+    print(f"教師 loss :{loss_dict['teacher_loss'].item()}")
+    print(f"lcp loss :{loss_dict['lcp_loss'].item()}")
+    
+    # 反向傳播
+    total_loss.backward()
+    
+    # 檢查梯度是否存在
+    has_grad = any(p.grad is not None and p.grad.abs().sum().item() > 0 
+                  for p in model.parameters() if p.requires_grad)
+    aux_has_grad = any(p.grad is not None and p.grad.abs().sum().item() > 0 
+                      for p in aux_net.parameters() if p.requires_grad)
+    
+    # 測試通過條件
+    assert total_loss.item() > 0, "總損失應該大於0"
+    assert has_grad, "模型參數應該有梯度"
+    assert aux_has_grad, "輔助網路參數應該有梯度"
+    
+    print("✅ compute_losses 測試通過")
+    return True
+
+
+
+def test_os2d_model_in_prune_eval():
+    import os
+    import torch
+    import pytest   
     import numpy as np
     from src.os2d_model_in_prune import Os2dModelInPrune
     from src.auxiliary_network import AuxiliaryNetwork
@@ -2169,7 +2464,7 @@ def test_train_one_epoch_basic():
         do_augmentation=False
     )
 
-    # 3. 初始化模型與優化器（強制用 CPU，減少顯存壓力）
+    # 3. 初始化模型與優化器（強制用 cuda，減少顯存壓力）
     device = torch.device('cpu')
     os2d_path = "./os2d_v2-train.pth"
     if not os.path.exists(os2d_path):
@@ -2177,68 +2472,7 @@ def test_train_one_epoch_basic():
     model = Os2dModelInPrune(pretrained_path=os2d_path, is_cuda=False).to(device)
     aux_net = AuxiliaryNetwork(in_channels=2048).to(device)
     optimizer = torch.optim.Adam(list(model.parameters()) + list(aux_net.parameters()), lr=1e-3)
-
-    # 4. 執行一個 epoch 的訓練（只跑一個 batch，print_freq=0）
-    try:
-        loss_history = model.train_one_epoch(
-            train_loader=train_loader,
-            optimizer=optimizer,
-            auxiliary_net=aux_net,
-            device=device,
-            print_freq=0,
-            max_batches=1  # 只跑 1 個 batch
-        )
-    except NotImplementedError:
-        print("⚠️ train_one_epoch 尚未實作，請先完成實作。")
-        assert False, "train_one_epoch 尚未實作"
-        return False
-    except Exception as e:
-        print(f"❌ 執行 train_one_epoch 發生例外: {e}")
-        assert False, f"train_one_epoch 執行失敗: {e}"
-        return False
-
-    # 5. 驗證 loss 是否合理
-    if isinstance(loss_history, list) and len(loss_history) > 0:
-        avg_loss = np.mean(loss_history)
-        print(f"✅ train_one_epoch 執行成功，平均 loss={avg_loss:.4f}")
-        assert np.isfinite(avg_loss), "loss 應為有限數值"
-    else:
-        print("⚠️ train_one_epoch 未回傳 loss 歷史，請檢查實作")
-        assert False, "train_one_epoch 未回傳 loss 歷史"
-
-    # 6. 驗證參數是否有更新
-    orig_params = [p.clone().detach() for p in model.parameters()]
-    model.train_one_epoch(
-        train_loader=train_loader,
-        optimizer=optimizer,
-        auxiliary_net=aux_net,
-        device=device,
-        print_freq=0,
-        max_batches=1
-    )
-    updated_params = [p.clone().detach() for p in model.parameters()]
-    changed = any(not torch.equal(a, b) for a, b in zip(orig_params, updated_params))
-    assert changed, "模型參數未更新，請檢查 optimizer/backward 實作"
-    print("✅ train_one_epoch 參數更新檢查通過")
-
-    print("🎉 test_train_one_epoch_basic: OS2D 單 batch 微調訓練測試通過")
     return True
-
-def test_lcp_prune_and_train_pipeline():
-    pass
-
-def test_save_checkpoint():
-    pass
-
-def get_conv_structure(model):
-    return [(name, m.in_channels, m.out_channels, m.kernel_size)
-            for name, m in model.backbone.named_modules() if isinstance(m, torch.nn.Conv2d)]
-
-def test_os2d_compatibility_with_pruned_model():
-    pass
-
-def test_os2d_model_in_prune_eval():
-    pass
 
 
 def test_full_lcp_pipeline_with_eval_and_checkpoint():

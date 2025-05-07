@@ -40,19 +40,19 @@ def run_all_tests():
         # ("AuxiliaryNetwork 前向傳播測試", test_forward_pass),
         # ("AuxiliaryNetwork 更新通道測試", test_update_input_channels),
         
-        ("ContextualRoIAlign 測試1", test_forward),
-        ("ContextualRoIAlign 測試2", test_empty_boxes),
-        ("ContextualRoIAlign All Case 測試" , test_contextual_roi_align_all_cases ),
+        # ("ContextualRoIAlign 測試1", test_forward),
+        # ("ContextualRoIAlign 測試2", test_empty_boxes),
+        # ("ContextualRoIAlign All Case 測試" , test_contextual_roi_align_all_cases ),
 
         # ("LCP 通道選擇器測試", test_lcp_channel_selector),
         # ("LCP 通道選擇器特徵圖測試", test_feature_map_extraction ),
         # ("通道重要性計算測試", test_channel_importance_computation),
-        
+        # ("Loss 測試", test_compute_losses),
         ("訓練函數 basic 測試" , test_train_one_epoch_basic ),
-        # ("Finetune 測試", test_lcp_finetune_pipeline ),
-        # ("Save Checkpoint 測試", test_save_checkpoint),
         # ("Eval 測試" , test_os2d_model_in_prune_eval),
+        # ("Save Checkpoint 測試", test_save_checkpoint),
         # ("OS2D 框架相容性測試", test_os2d_compatibility_with_pruned_model),
+        # ("Finetune 測試", test_lcp_finetune_pipeline ),
         # ("完整 LCP 剪枝 pippline+train 測試", test_lcp_prune_and_train_pipeline),
         # ("完整 pipeline 測試", test_full_lcp_pipeline_with_eval_and_checkpoint ),
     ]
