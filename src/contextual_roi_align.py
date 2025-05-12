@@ -1,116 +1,106 @@
+# src/contextual_roi_align.py
 import torch
-import torch.nn as nn
 import torchvision.ops as ops
+import torch.nn as nn
 
 class ContextualRoIAlign(nn.Module):
+    """
+    定位感知的 RoI Align 層
+    支援上下文增強的特徵提取，基於 LCP 論文的設計
+    """
     def __init__(self, output_size=7):
         super().__init__()
         self.output_size = output_size
-
-    def _to_bbox_tensor(self, box_obj):
-        # 支援 BoxList 或 tensor
-        if hasattr(box_obj, "bbox_xyxy"):
-            print(f"[LOG] BoxList detected, bbox_xyxy.shape={box_obj.bbox_xyxy.shape}")
-            return box_obj.bbox_xyxy.float()
-        elif isinstance(box_obj, torch.Tensor):
-            print(f"[LOG] Tensor box detected, shape={box_obj.shape}")
-            return box_obj.float()
-        else:
-            print(f"[ERROR] Unknown box type: {type(box_obj)}")
-            raise TypeError(f"Unknown box type: {type(box_obj)}")
-
-    def _make_rois(self, box_list, device, dtype):
-        rois = []
-        for i, b in enumerate(box_list):
-            b = self._to_bbox_tensor(b)
-            print(f"[LOG] make_rois: batch_idx={i}, box.shape={b.shape}, numel={b.numel()}")
-            if b.numel() == 0:
-                print(f"[LOG] make_rois: batch_idx={i} is empty, skip")
-                continue
-            if b.dim() == 1:
-                b = b.unsqueeze(0)
-            idx = torch.full((b.size(0), 1), i, dtype=dtype, device=device)
-            rois.append(torch.cat([idx, b], dim=1))
-        if rois:
-            all_rois = torch.cat(rois, dim=0)
-            print(f"[LOG] make_rois: final rois.shape={all_rois.shape}")
-            return all_rois
-        else:
-            print(f"[LOG] make_rois: all empty, return zeros")
-            return torch.zeros((0, 5), dtype=dtype, device=device)
-
+    
     def forward(self, feature_map, boxes, gt_boxes=None):
+        """
+        前向傳播
+        
+        Args:
+            feature_map: 特徵圖 [B, C, H, W]
+            boxes: 預測框列表，每個元素形狀為 [N, 4]
+            gt_boxes: 真實框列表，每個元素形狀為 [M, 4]，用於上下文增強
+            
+        Returns:
+            RoI 對齊後的特徵，保持批次維度
+        """
+        if isinstance(boxes, list):
+            batch_size = len(boxes)
+        else:
+            batch_size = feature_map.size(0)
+            # 如果 boxes 不是列表，將其轉換為列表形式
+            if boxes.dim() == 3:  # [B, N, 4]
+                boxes = [boxes[i] for i in range(boxes.size(0))]
+            else:
+                boxes = [boxes]  # 單個批次
+        
+        if gt_boxes is not None and not isinstance(gt_boxes, list):
+            if gt_boxes.dim() == 3:  # [B, M, 4]
+                gt_boxes = [gt_boxes[i] for i in range(gt_boxes.size(0))]
+            else:
+                gt_boxes = [gt_boxes]  # 單個批次
+        
         device = feature_map.device
-        dtype = feature_map.dtype
-        batch_size = feature_map.size(0)
-
-        print(f"[LOG] ContextualRoIAlign.forward: batch_size={batch_size}")
-        print(f"[LOG] boxes types: {[type(b) for b in boxes]}")
-        if gt_boxes is not None:
-            print(f"[LOG] gt_boxes types: {[type(b) for b in gt_boxes]}")
-
-        boxes = [self._to_bbox_tensor(b) for b in boxes]
-        if gt_boxes is not None:
-            gt_boxes = [self._to_bbox_tensor(b) for b in gt_boxes]
-
-        # 普通 RoI Align
-        if gt_boxes is None:
-            rois = self._make_rois(boxes, device, dtype)
-            print(f"[LOG] RoIAlign: rois.shape={rois.shape}")
-            if rois.size(0) == 0:
-                print(f"[LOG] RoIAlign: empty rois, return empty tensor")
-                return torch.empty((0, feature_map.size(1), self.output_size, self.output_size), device=device, dtype=dtype)
-            out = ops.roi_align(feature_map, rois, (self.output_size, self.output_size), 1.0, -1)
-            print(f"[LOG] RoIAlign: output.shape={out.shape}")
-            return out
-
-        # 上下文增強 RoI Align
-        context_rois = []
-        max_boxes = 5  # <--- 這裡限制最多只取 10 個 box
+        channels = feature_map.size(1)
+        
+        # 處理每個批次
+        batch_features = []
         for i in range(batch_size):
-            box_batch = boxes[i]
-            gt_box_batch = gt_boxes[i]
-            # 限制每個 batch 最多只取前 10 個 box
-            box_batch = box_batch[:max_boxes]
-            gt_box_batch = gt_box_batch[:max_boxes]
-            print(f"[LOG] context batch {i}: box.shape={box_batch.shape}, gt_box.shape={gt_box_batch.shape}")
-            if box_batch.numel() == 0 or gt_box_batch.numel() == 0:
-                print(f"[LOG] context batch {i}: empty box or gt_box, skip")
-                continue
-            N, M = box_batch.size(0), gt_box_batch.size(0)
-            box_exp = box_batch.unsqueeze(1).expand(N, M, 4)
-            gt_exp = gt_box_batch.unsqueeze(0).expand(N, M, 4)
-            x1 = torch.min(box_exp[..., 0], gt_exp[..., 0])
-            y1 = torch.min(box_exp[..., 1], gt_exp[..., 1])
-            x2 = torch.max(box_exp[..., 2], gt_exp[..., 2])
-            y2 = torch.max(box_exp[..., 3], gt_exp[..., 3])
-            ctx_boxes = torch.stack([x1, y1, x2, y2], dim=2).reshape(-1, 4)
-            idx = torch.full((ctx_boxes.size(0), 1), i, dtype=dtype, device=device)
-            context_rois.append(torch.cat([idx, ctx_boxes], dim=1))
-            print(f"[LOG] context batch {i}: ctx_boxes.shape={ctx_boxes.shape}")
-
-        if context_rois:
-            context_rois = torch.cat(context_rois, dim=0)
-            print(f"[LOG] context_rois.shape={context_rois.shape}")
-        else:
-            print(f"[LOG] context_rois: all empty")
-            context_rois = torch.zeros((0, 5), dtype=dtype, device=device)
-        context_features = ops.roi_align(feature_map, context_rois, (self.output_size, self.output_size), 1.0, -1)
-        print(f"[LOG] context_features.shape={context_features.shape}")
-
-        box_rois = self._make_rois(boxes, device, dtype)
-        print(f"[LOG] box_rois.shape={box_rois.shape}")
-        if box_rois.size(0) == 0:
-            print(f"[LOG] box_rois: empty, return context_features")
-            return context_features
-        box_features = ops.roi_align(feature_map, box_rois, (self.output_size, self.output_size), 1.0, -1)
-        print(f"[LOG] box_features.shape={box_features.shape}")
-
-        if context_features.size(0) > 0:
-            context_mean = torch.mean(context_features, dim=0, keepdim=True).expand_as(box_features)
-            enhanced_features = box_features + context_mean
-            print(f"[LOG] enhanced_features.shape={enhanced_features.shape}")
-            return enhanced_features
-        else:
-            print(f"[LOG] context_features empty, return box_features")
-            return box_features
+            # 確保框是浮點型
+            if i < len(boxes) and boxes[i].numel() > 0:
+                box_batch = boxes[i].float() if boxes[i].dtype != torch.float32 else boxes[i]
+                # 確保 box_batch 是 2D 張量 [N, 4]
+                if box_batch.dim() > 2:
+                    # 檢查 tensor 的最後一個維度是否為 4
+                    if box_batch.size(-1) == 4:
+                        box_batch = box_batch.reshape(-1, 4)
+                    else:
+                        # 如果最後一個維度不是 4，需要先處理或轉換為有效的邊界框格式
+                        # 假設這是一個格式錯誤的邊界框，我們創建一個空的邊界框代替
+                        box_batch = torch.zeros((0, 4), dtype=torch.float32, device=box_batch.device)
+                
+                # 處理上下文增強
+                if gt_boxes is not None and i < len(gt_boxes) and gt_boxes[i].numel() > 0:
+                    gt_box_batch = gt_boxes[i].float() if gt_boxes[i].dtype != torch.float32 else gt_boxes[i]
+                    
+                    # 計算上下文框
+                    N, M = box_batch.size(0), gt_box_batch.size(0)
+                    box_exp = box_batch.unsqueeze(1).expand(N, M, 4)
+                    gt_exp = gt_box_batch.unsqueeze(0).expand(N, M, 4)
+                    
+                    x1 = torch.min(box_exp[..., 0], gt_exp[..., 0])
+                    y1 = torch.min(box_exp[..., 1], gt_exp[..., 1])
+                    x2 = torch.max(box_exp[..., 2], gt_exp[..., 2])
+                    y2 = torch.max(box_exp[..., 3], gt_exp[..., 3])
+                    ctx_boxes = torch.stack([x1, y1, x2, y2], dim=2).view(-1, 4)
+                    
+                    # 添加批次索引
+                    box_idx = torch.full((box_batch.size(0), 1), i, dtype=box_batch.dtype, device=box_batch.device)
+                    ctx_idx = torch.full((ctx_boxes.size(0), 1), i, dtype=ctx_boxes.dtype, device=ctx_boxes.device)
+                    
+                    box_rois = torch.cat([box_idx, box_batch], dim=1).to(feature_map.device)
+                    ctx_rois = torch.cat([ctx_idx, ctx_boxes], dim=1).to(feature_map.device)
+                    
+                    # 提取特徵
+                    box_features = ops.roi_align(feature_map, box_rois, (self.output_size, self.output_size), 1.0, -1)
+                    ctx_features = ops.roi_align(feature_map, ctx_rois, (self.output_size, self.output_size), 1.0, -1)
+                    
+                    # 計算上下文特徵的均值
+                    ctx_mean = torch.mean(ctx_features.view(N, M, channels, self.output_size, self.output_size), dim=1)
+                    
+                    # 增強特徵 = 原始特徵 + 上下文特徵均值
+                    enhanced_features = box_features + ctx_mean
+                    
+                    batch_features.append(enhanced_features)
+                else:
+                    # 只使用原始框
+                    box_idx = torch.full((box_batch.size(0), 1), i, dtype=box_batch.dtype, device=box_batch.device)
+                    box_rois = torch.cat([box_idx, box_batch], dim=1).to(feature_map.device)
+                    box_features = ops.roi_align(feature_map, box_rois, (self.output_size, self.output_size), 1.0, -1)
+                    batch_features.append(box_features)
+            else:
+                # 空框情況
+                batch_features.append(torch.zeros((0, channels, self.output_size, self.output_size), device=device))
+        
+        # 返回結果，保持批次維度
+        return batch_features

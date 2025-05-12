@@ -1,5 +1,5 @@
 output:
-  path: "" # Substitute ""
+  path: "./models/finetune.pth" # Substitute ""
   save_iter: 0
   best_model:
     do_get_best_model: True
@@ -9,9 +9,9 @@ output:
 is_cuda: True
 random_seed: 0
 init:
-  model: "" # Substitute "models/resnet50-19c8e357.pth"
+  model: "models/os2d_v1-train.pth" # Substitute "models/resnet50-19c8e357.pth"
 model:
-  backbone_arch: "" # Substitute "ResNet50" or "ResNet101"
+  backbone_arch: "ResNet50" # Substitute "ResNet50" or "ResNet101"
   use_inverse_geom_model: False # Substitute v1: False v2 : True
   use_simplified_affine_model: True # Substitute v1: True v2 : False
 train:
