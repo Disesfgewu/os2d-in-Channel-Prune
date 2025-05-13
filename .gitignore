@@ -3,7 +3,6 @@ __pycache__/
 *.pth
 *.log
 output/
-data/grozi
 data/dairy
 data/paste
 data/instre
