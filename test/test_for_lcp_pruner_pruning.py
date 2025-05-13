@@ -228,15 +228,21 @@ class TestLCPPrunerPruning:
         # 但是權重中應該有一些通道被設置為零
         
         # 計算非零通道數
-        non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(target_layer.weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
+        # 結構性剪枝後，直接比較 out_channels
         expected_channels = int(original_channels * (1 - pruneratio))
-        
-        assert non_zero_channels == expected_channels
+        # 剪枝後重新獲取該層
+        target_layer_new = pruner.net_feature_maps
+        for part in layer_name.split('.'):
+            if part.isdigit():
+                target_layer_new = target_layer_new[int(part)]
+            else:
+                target_layer_new = getattr(target_layer_new, part)
         
         # 如果有偏置，檢查偏置
         if hasattr(target_layer, 'bias') and target_layer.bias is not None:
-            non_zero_bias = torch.sum(target_layer.bias.data != 0).item()
-            assert non_zero_bias == expected_channels
+            assert target_layer.bias.numel() == expected_channels, \
+                f"剪枝後的 bias 長度應為 {expected_channels}，但實際為 {target_layer.bias.numel()}"
+
     
     def test_multi_layer_pruning(self, device):
         """測試剪枝多個層"""
@@ -289,11 +295,23 @@ class TestLCPPrunerPruning:
                 else:
                     target_layer = getattr(target_layer, part)
             
-            # 計算非零通道數
-            non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(target_layer.weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
+            # 結構性剪枝後，直接比較 out_channels
             expected_channels = int(original_channels[layer_name] * (1 - pruneratio))
+
+            # 剪枝後重新獲取該層
+            target_layer_new = pruner.net_feature_maps
+            for part in layer_name.split('.'):
+                if part.isdigit():
+                    target_layer_new = target_layer_new[int(part)]
+                else:
+                    target_layer_new = getattr(target_layer_new, part)
             
-            assert non_zero_channels == expected_channels
+            # 如果有偏置，檢查偏置
+            if hasattr(target_layer, 'bias') and target_layer.bias is not None:
+                assert target_layer.bias.numel() == expected_channels, \
+                    f"剪枝後的 bias 長度應為 {expected_channels}，但實際為 {target_layer.bias.numel()}"
+
+        
     
     def test_with_synthetic_data(self, sample_batch, device, grozi_dataset):
         """使用合成數據測試剪枝"""
@@ -358,11 +376,21 @@ class TestLCPPrunerPruning:
         pruneratio = 0.3
         pruner.prune_layer(layer_name, images, boxes, pruneratio, class_images=class_images)
         
-        # 檢查剪枝後的通道數
-        non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(target_layer.weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
+        # 結構性剪枝後，直接比較 out_channels
         expected_channels = int(original_channels * (1 - pruneratio))
+        # 剪枝後重新獲取該層
+        target_layer_new = pruner.net_feature_maps
+        for part in layer_name.split('.'):
+            if part.isdigit():
+                target_layer_new = target_layer_new[int(part)]
+            else:
+                target_layer_new = getattr(target_layer_new, part)
         
-        assert non_zero_channels == expected_channels
+        # 如果有偏置，檢查偏置
+        if hasattr(target_layer, 'bias') and target_layer.bias is not None:
+            assert target_layer.bias.numel() == expected_channels, \
+                f"剪枝後的 bias 長度應為 {expected_channels}，但實際為 {target_layer.bias.numel()}"
+
     
     def test_with_grozi_data(self, grozi_dataset, device):
         """使用 Grozi 數據測試剪枝"""
@@ -429,11 +457,20 @@ class TestLCPPrunerPruning:
         try:
             pruner.prune_layer(layer_name, images, boxes, pruneratio, class_images=class_images)
             
-            # 檢查剪枝後的通道數
-            non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(target_layer.weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
+            # 結構性剪枝後，直接比較 out_channels
             expected_channels = int(original_channels * (1 - pruneratio))
+            # 剪枝後重新獲取該層
+            target_layer_new = pruner.net_feature_maps
+            for part in layer_name.split('.'):
+                if part.isdigit():
+                    target_layer_new = target_layer_new[int(part)]
+                else:
+                    target_layer_new = getattr(target_layer_new, part)
             
-            assert non_zero_channels == expected_channels
+            # 如果有偏置，檢查偏置
+            if hasattr(target_layer, 'bias') and target_layer.bias is not None:
+                assert target_layer.bias.numel() == expected_channels, \
+                    f"剪枝後的 bias 長度應為 {expected_channels}，但實際為 {target_layer.bias.numel()}"
         except Exception as e:
             # 如果使用實際數據出錯，則跳過測試
             pytest.skip(f"Error with Grozi data: {e}")

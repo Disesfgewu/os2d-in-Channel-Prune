@@ -36,6 +36,8 @@ cfg.init.transform = ""
 
 # Training settings
 cfg.train = CN()
+cfg.train.pruneratio = 0.5
+
 # train or skip training and just do evaluation
 cfg.train.do_training = True
 # Batch size

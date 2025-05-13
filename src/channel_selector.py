@@ -20,7 +20,6 @@ class OS2DChannelSelector:
         self.auxiliarynet = auxiliarynet
         self.alpha = alpha
         self.beta = beta
-        self.logger = model.logger
         
     def get_features(self, layer_name, images, class_images=None):
         """
@@ -29,17 +28,24 @@ class OS2DChannelSelector:
         Args:
             layer_name (str): 層名稱
             images (Tensor): 輸入圖像
+            class_images (Tensor, optional): 類別圖像
         
         Returns:
             Tensor: 特徵圖
         """
-        # 獲取目標層
-        target_layer = self.net_feature_maps.net_feature_maps
+        # 獲取目標層 - 使用 self.model.net_feature_maps 而不是 self.net_feature_maps
+        target_layer = self.net_feature_maps
         for part in layer_name.split('.'):
             if part.isdigit():
                 target_layer = target_layer[int(part)]
             else:
-                target_layer = getattr(target_layer, part)
+                # 檢查層是否在 modules 中
+                if hasattr(target_layer, "_modules") and part in target_layer._modules:
+                    target_layer = target_layer._modules[part]
+                elif hasattr(target_layer, part):
+                    target_layer = getattr(target_layer, part)
+                else:
+                    raise AttributeError(f"'{type(target_layer).__name__}' object has no attribute '{part}'")
                 
         # 註冊鉤子函數
         features = []
@@ -50,46 +56,14 @@ class OS2DChannelSelector:
         
         # 前向傳播
         with torch.no_grad():
-            # 如果有提供class_images
-            if class_images is not None:
-                # 確保 class_images 格式正確
-                if not isinstance(class_images, list):
-                    # 如果 class_images 不是列表，將其轉換為列表
-                    class_images = list(class_images)
-                self.logger.info(f"1 Class images: {len(class_images)}")
-                
-                # 確保類別圖像具有正確的維度 [C, H, W]
-                processed_class_images = []
-                for img in class_images:
-                    # 確保圖像是 3D [C, H, W]
-                    if img.dim() == 4:  # 如果是 [B, C, H, W]
-                        img = img.squeeze(0)  # 移除批次維度
-                    elif img.dim() > 4 or img.dim() < 3:
-                        # 處理其他不合適的形狀
-                        continue
-                    
-                    # 現在 img 應該是 [C, H, W]
-                    processed_class_images.append(img)
-                
-                self.logger.info(f"2 Class images: {len(processed_class_images)}")
-                
-                # 確保處理後的列表非空
-                if not processed_class_images:
-                    # 如果所有類別圖像都被跳過，使用空白圖像
-                    dummy_img = torch.zeros(3, 224, 224, device=images.device)
-                    processed_class_images = [dummy_img]
-                
-                self.logger.info(f"3 Class images: {len(processed_class_images)} , images : {images.shape}")
-                self.net_feature_maps(images, class_images=processed_class_images)
-            else:
-                # 沒有提供 class_images 時使用假的類別圖像
-                dummy_class_images = [images[0]]  # 使用第一張圖像作為假的類別圖像 (已移除批次維度)
-                self.net_feature_maps(images, class_images=dummy_class_images)
+            # 使用 self.model 進行前向傳播
+            self.net_feature_maps(images)
             
         # 移除鉤子
         handle.remove()
         
         return features[0]
+
     
     def compute_importance(self, layer_name, images, boxes, class_images=None):
         """
@@ -104,22 +78,28 @@ class OS2DChannelSelector:
         Returns:
             Tensor: 通道重要性分數
         """
-        # 獲取特徵
-        features = self.get_features(layer_name, images, class_images)
-        
-        # 計算分類損失
-        cls_loss = self.compute_cls_loss(features, boxes)
+        # 獲取特徵 - 只傳遞 images 參數
+        features = self.get_features(layer_name, images)
         
         # 獲取目標層
-        target_layer = self.net_feature_maps.net_feature_maps
+        target_layer = self.net_feature_maps
         for part in layer_name.split('.'):
             if part.isdigit():
                 target_layer = target_layer[int(part)]
             else:
-                target_layer = getattr(target_layer, part)
-                
+                if hasattr(target_layer, "_modules") and part in target_layer._modules:
+                    target_layer = target_layer._modules[part]
+                elif hasattr(target_layer, part):
+                    target_layer = getattr(target_layer, part)
+                else:
+                    raise AttributeError(f"'{type(target_layer).__name__}' object has no attribute '{part}'")
+        
         # 獲取通道數
         num_channels = target_layer.out_channels
+        
+        # 更新輔助網絡的輸入通道數
+        if hasattr(self.auxiliarynet, 'update_input_channels'):
+            self.auxiliarynet.update_input_channels(num_channels)
         
         # 初始化重要性分數
         importance = torch.zeros(num_channels, device=images.device)
@@ -138,15 +118,22 @@ class OS2DChannelSelector:
             
             # 使用輔助網絡計算損失
             cls_scores, reg_preds = self.auxiliarynet(masked_features, boxes)
-            aux_loss = self.compute_aux_loss(cls_scores, reg_preds, boxes)
+            
+            # 確保 compute_aux_loss 方法存在
+            if hasattr(self, 'compute_aux_loss'):
+                aux_loss = self.compute_aux_loss(cls_scores, reg_preds, boxes)
+            else:
+                # 如果沒有 compute_aux_loss 方法，使用默認實現
+                aux_loss = torch.tensor(0.0, device=images.device)
             
             # 計算總損失
             total_loss = self.alpha * reconstruction_error + self.beta * aux_loss
             
             # 更新重要性分數
             importance[i] = total_loss
-            
+        
         return importance
+
     
     def compute_cls_loss(self, features, boxes):
         """

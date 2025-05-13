@@ -16,6 +16,7 @@ from os2d.structures.feature_map import FeatureMapSize
 from src.auxiliary_network import AuxiliaryNetwork, ContextualRoIAlign
 from os2d.modeling.model import Os2dModel
 from os2d.utils.logger import setup_logger
+from src.lcp_pruner import LCPPruner
 import logging
 import torch.nn.functional as F
 logger = setup_logger("OS2D")
@@ -112,14 +113,22 @@ class TestChannelSelector:
     def test_initialization(self, device):
         """測試初始化"""
         # 初始化模型和輔助網絡
-        model = build_feature_extractor("resnet50").to(device)
+        pruner = LCPPruner(
+            logger=logger,
+            is_cuda=device.type == "cuda",
+            backbone_arch="resnet50",
+            alpha=0.6,
+            beta=0.4,
+            pruneratio=0.5
+        )
+        model = pruner.net_feature_maps.to(device)
         auxnet = AuxiliaryNetwork(in_channels=64).to(device)
         
         # 初始化通道選擇器
         selector = OS2DChannelSelector(model=model, auxiliarynet=auxnet, alpha=0.6, beta=0.4)
         
         # 檢查屬性
-        assert selector.model == model
+        assert selector.net_feature_maps == model
         assert selector.auxiliarynet == auxnet
         assert selector.alpha == 0.6
         assert selector.beta == 0.4

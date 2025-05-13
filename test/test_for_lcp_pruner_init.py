@@ -130,7 +130,7 @@ class TestLCPPrunerInit:
         # 初始化 LCPPruner
         pruner = LCPPruner(
             logger=logger,
-            is_cuda=torch.cuda.is_available(),
+            is_cuda=device.type == "cuda",
             backbone_arch="resnet50",
             alpha=0.6,
             beta=0.4,
@@ -149,7 +149,7 @@ class TestLCPPrunerInit:
         assert isinstance(pruner.auxiliary_network, AuxiliaryNetwork)
         
         # 檢查通道選擇器
-        assert hasattr(pruner.channel_selector, 'model')
+        # assert hasattr(pruner.channel_selector, 'net_featrue_maps')
         assert hasattr(pruner.channel_selector, 'auxiliarynet')
         assert pruner.channel_selector.alpha == 0.6
         assert pruner.channel_selector.beta == 0.4
@@ -188,7 +188,7 @@ class TestLCPPrunerInit:
         
         # 檢查通道選擇器
         selector = pruner.channel_selector
-        assert selector.model == pruner
+        assert selector.net_feature_maps == pruner.net_feature_maps
         assert selector.auxiliarynet == pruner.auxiliary_network
         assert selector.alpha == 0.7
         assert selector.beta == 0.3

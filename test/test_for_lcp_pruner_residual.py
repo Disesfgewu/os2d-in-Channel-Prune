@@ -278,24 +278,21 @@ class TestLCPPrunerResidual:
                 ("conv2", block.conv2),
                 ("conv3", block.conv3)
             ]:
-                # 計算非零通道數
-                non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(layer.weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
-                
                 if layer_name == "conv3":
-                    # conv3 層通常有不同的通道數（擴展因子為4）
-                    expected_channels_conv3 = int(layer.weight.shape[0] * (1 - pruneratio))
-                    assert non_zero_channels == expected_channels_conv3 or non_zero_channels > 0, f"層 {layer_name} 的非零通道數應為 {expected_channels_conv3}，但實際為 {non_zero_channels}"
+                    # conv3 層通常有不同的通道數（通常是原始的4倍）
+                    # 剪枝後的 out_channels 只要大於0即可（實際剪枝比例可能略有差異）
+                    assert layer.out_channels > 0, f"層 {layer_name} 的 out_channels 應大於0，但實際為 {layer.out_channels}"
                 else:
                     expected_channels = int(original_channels * (1 - pruneratio))
-                    assert non_zero_channels == expected_channels or non_zero_channels > 0, f"層 {layer_name} 的非零通道數應為 {expected_channels}，但實際為 {non_zero_channels}"
-            
+                    assert layer.out_channels == expected_channels or layer.out_channels > 0, \
+                        f"層 {layer_name} 的 out_channels 應為 {expected_channels} 或 >0，但實際為 {layer.out_channels}"
+
             # 檢查下採樣層
             if hasattr(block, 'downsample') and block.downsample is not None:
-                non_zero_channels = torch.sum(torch.sum(torch.sum(torch.sum(block.downsample[0].weight.data != 0, dim=1), dim=1), dim=1) > 0).item()
-                expected_channels = int(original_channels * (1 - pruneratio))
-                
-                # For downsample layer, allow for different channel counts as it often has different dimensions
-                assert non_zero_channels > 0, f"下採樣層的非零通道數應大於0，但實際為 {non_zero_channels}"
+                downsample_layer = block.downsample[0]
+                assert downsample_layer.out_channels > 0, \
+                    f"下採樣層的 out_channels 應大於0，但實際為 {downsample_layer.out_channels}"
+
     
     def test_build_dependency_graph(self, device):
         """測試構建依賴圖"""

@@ -132,7 +132,7 @@ python main.py --config-file experiments/config_training.yml model.use_inverse_g
 For the V1-train model, we used this command:
 ```bash
 cd $OS2D_ROOT
-python main.py --config-file experiments/config_training.yml model.use_inverse_geom_model False model.use_simplified_affine_model True train.objective.loc_weight 0.2 train.model.freeze_bn_transform False model.backbone_arch ResNet101 init.model models/gl18-tl-resnet101-gem-w-a4d43db-converted.pth train.mining.do_mining False output.path output/os2d_v1-train
+python main.py --config-file experiments/config_training.yml model.use_inverse_geom_model False model.use_simplified_affine_model True train.objective.loc_weight 0.2 train.model.freeze_bn_transform False model.backbone_arch ResNet101 init.model models/os2d_v1-train.pth train.mining.do_mining False output.path output/fine-test1-os2d_v1-train train.cache_images False
 ```
 Note that these runs need a lot of RAM due to caching of the whole training set. If this does not work for you you can use parameters `train.cache_images False`, which will load images on the fly, but can be slow. Also note that several first iterations of training can be slow bacause of "warming up", i.e., computing the grids of anchors in Os2dBoxCoder. Those computations are cached, so everyhitng will eventually run faster.
 

@@ -23,7 +23,7 @@ from .optimization import setup_lr, get_learning_rate, set_learning_rate
 from os2d.structures.bounding_box import nms, cat_boxlist
 from os2d.structures.feature_map import FeatureMapSize
 import os2d.utils.visualization as visualizer
-
+from src.lcp_pruner import LCPPruner
 
 def prepare_batch_data(batch_data, is_cuda, logger):
     """Helper function to parse batch_data and put tensors on a GPU.
@@ -101,7 +101,6 @@ def train_one_batch(batch_data, net, cfg, criterion, optimizer, dataloader, logg
     if cfg.visualization.train.show_detections:
         visualizer.decode_scores_show_detections(dataloader, images, class_ids,
                                                  class_scores, loc_scores, corners)
-
     main_loss = losses["loss"]
     main_loss.backward()
 
@@ -415,7 +414,13 @@ def trainval_loop(dataloader_train, net, cfg, criterion, optimizer, dataloaders_
     t_start = time.time()
     num_steps_for_logging, meters_running = 0, {}
     full_log = init_log()
-   
+
+    # 1. 剪枝（全局，一次性，LCP論文推薦）
+    if hasattr(net, "prune_model"):
+        logger.info("==> Start LCP Pruning before training ...")
+        net.prune_model(dataloader_train, pruneratio=cfg.train.pruneratio if hasattr(cfg.train, "pruneratio") else 0.5)
+        logger.info("==> LCP Pruning finished. Start finetuning ...")
+
     if cfg.train.optim.max_iter > 0 and cfg.train.do_training:
         logger.info("Start training")
 
@@ -425,6 +430,9 @@ def trainval_loop(dataloader_train, net, cfg, criterion, optimizer, dataloaders_
         # evaluate the initial model
         meters_eval = evaluate_model(dataloaders_eval, net, cfg, criterion)
         
+        net.prune_model(dataloader_train, prune_rate=0.3)
+
+
         if cfg.output.best_model.do_get_best_model:
             assert (cfg.output.best_model.dataset and cfg.output.best_model.dataset in meters_eval) \
                 or (len(cfg.eval.dataset_names) > 0 and cfg.eval.dataset_names[0] in meters_eval), \

@@ -325,16 +325,21 @@ class TestLCPPrunerDependency:
     def test_with_grozi_data(self, grozi_dataset, device, sample_batch):
         """使用 Grozi 數據測試依賴關係處理"""
         # 檢查是否有可用的 Grozi 數據集
+        device = 'cpu'
         if grozi_dataset["dataloader_train"] is None:
             pytest.skip("Grozi dataset not available")
         
         # 初始化 LCPPruner
         pruner = LCPPruner(
             logger=logger,
-            is_cuda=torch.cuda.is_available(),
+            is_cuda=False,
             backbone_arch="resnet50"
         )
-        
+        # 保存原始權重以便比較
+        original_weights = {}
+        for name, module in pruner.net_feature_maps.named_modules():
+            if isinstance(module, nn.Conv2d) and not pruner.should_skip_layer(name):
+                original_weights[name] = torch.sum(module.weight.data != 0).item()
         # 解析批次數據
         if isinstance(sample_batch, (list, tuple)) and len(sample_batch) == 2:
             images, boxes = sample_batch
@@ -386,15 +391,16 @@ class TestLCPPrunerDependency:
 
         # 檢查是否有層被剪枝
         pruned_layers = []
-        for name, module in pruner.named_modules():
+        for name, module in pruner.net_feature_maps.named_modules():
             if isinstance(module, nn.Conv2d) and not pruner.should_skip_layer(name):
-                # 計算非零權重的比例
-                non_zero_weights = torch.sum(module.weight.data != 0).item()
-                total_weights = module.weight.data.numel()
-                non_zero_ratio = non_zero_weights / total_weights
-                
-                if non_zero_ratio < 1.0:
-                    pruned_layers.append(name)
+                if name in original_weights:
+                    # 計算非零權重的數量
+                    non_zero_weights = torch.sum(module.weight.data != 0).item()
+                    # 如果非零權重減少，則該層被剪枝
+                    if non_zero_weights < original_weights[name]:
+                        pruned_layers.append(name)
+                        logger.info(f"Layer {name} pruned: {original_weights[name]} -> {non_zero_weights}")
         
         # 至少應該有一些層被剪枝
         assert len(pruned_layers) > 0, "沒有層被剪枝"
+            

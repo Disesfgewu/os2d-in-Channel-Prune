@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 class LCPPruner(Os2dModel):
     # 初始化與設置
-    def __init__(self, logger, is_cuda=False, merge_branch_parameters=False, use_group_norm=False,
+    def __init__(self, logger, is_cuda=True, merge_branch_parameters=False, use_group_norm=False,
                  backbone_arch="resnet50", use_inverse_geom_model=True, simplify_affine=False,
                  img_normalization=None, alpha=0.6, beta=0.4, pruneratio=0.5):
         """
@@ -93,7 +93,7 @@ class LCPPruner(Os2dModel):
             OS2DChannelSelector: 通道選擇器實例
         """
         channel_selector = OS2DChannelSelector(
-            model=self,
+            model=self.net_feature_maps,
             auxiliarynet=self.auxiliary_network,
             alpha=self.alpha,
             beta=self.beta
@@ -195,7 +195,7 @@ class LCPPruner(Os2dModel):
                     self.logger.warning(f"批量大小為 {class_images.size(0)} > 1，只使用第一個樣本")
                     class_images = class_images[0]  # Use only the first sample
             
-        self.logger.info(f"類別圖像形狀: {class_images.shape}，圖像形狀: {images.shape}")
+        # self.logger.info(f"類別圖像形狀: {class_images.shape}，圖像形狀: {images.shape}")
         # 使用 channel_selector 來計算重要性
         importance = self.channel_selector.compute_importance(
             layer_name, 
@@ -294,56 +294,74 @@ class LCPPruner(Os2dModel):
         return False
 
     def prune_layer(self, layer_name, images, boxes, pruneratio=0.3, class_images=None):
-        """
-        剪枝單一層
-        
-        Args:
-            layer_name (str): 層名稱
-            images (Tensor): 輸入圖像
-            boxes (Tensor): 邊界框
-            pruneratio (float): 剪枝比例，默認為0.3
-            
-        Returns:
-            self: 剪枝後的模型
-        """
         if self.should_skip_layer(layer_name):
             self.logger.info(f"跳過層: {layer_name}")
             return self
-            
-        # 計算通道重要性
+
         self.logger.info(f"計算層 {layer_name} 的通道重要性")
         importance = self.channel_selector.compute_importance(layer_name, images, boxes, class_images=class_images)
-        
-        # 獲取目標層
+        self.logger.info(f"剪枝前參數量 {sum(p.numel() for p in self.net_feature_maps.parameters())}")
+
+        # 1. 找到目標層與其父模組
         target_layer = self.net_feature_maps
+        parent = None
+        last_part = None
         for part in layer_name.split('.'):
+            parent = target_layer
+            last_part = part
             if part.isdigit():
                 target_layer = target_layer[int(part)]
             else:
                 target_layer = getattr(target_layer, part)
-                
-        # 確定要保留的通道數
+
         num_channels = target_layer.out_channels
         num_to_keep = int(num_channels * (1 - pruneratio))
-        
-        # 選擇重要性最高的通道
         _, indices = torch.topk(importance, num_to_keep)
         indices, _ = torch.sort(indices)
-        
-        # 創建掩碼
-        mask = torch.zeros(num_channels, device=images.device)
-        mask[indices] = 1
-        
-        # 應用掩碼到層的權重
-        target_layer.weight.data = target_layer.weight.data * mask.view(-1, 1, 1, 1)
-        
-        # 如果有偏置，也應用掩碼
-        if hasattr(target_layer, 'bias') and target_layer.bias is not None:
-            target_layer.bias.data = target_layer.bias.data * mask
-        
-        self.logger.info(f"已剪枝層: {layer_name}，保留 {num_to_keep}/{num_channels} 個通道")
-        
+
+        # 2. 重建新 Conv2d 層
+        from os2d.utils.utils import prune_conv_layer, prune_batchnorm_layer, prune_conv_in_channels
+        new_conv = prune_conv_layer(target_layer, indices.tolist())
+
+        # 3. 掛回 Conv2d
+        if isinstance(parent, (nn.Sequential, nn.ModuleList)):
+            parent[int(last_part)] = new_conv
+        else:
+            setattr(parent, last_part, new_conv)
+
+        # 4. 同步剪 BatchNorm2d（假設 conv1->bn1, conv2->bn2, conv3->bn3）
+        if "conv" in last_part:
+            bn_part = last_part.replace("conv", "bn")
+            if hasattr(parent, bn_part):
+                bn_layer = getattr(parent, bn_part)
+                new_bn = prune_batchnorm_layer(bn_layer, indices.tolist())
+                setattr(parent, bn_part, new_bn)
+
+        # 5. 同步剪下一層 Conv2d 的 in_channels
+        # 假設下一層是同一個 block 的 conv2/conv3 或下一個 block 的 conv1
+        # 這裡以同一個 block 的下一層為例
+        next_conv_name = None
+        if last_part == "conv1" and hasattr(parent, "conv2"):
+            next_conv_name = "conv2"
+        elif last_part == "conv2" and hasattr(parent, "conv3"):
+            next_conv_name = "conv3"
+        # 你可根據實際模型結構擴展
+        if next_conv_name and hasattr(parent, next_conv_name):
+            next_conv = getattr(parent, next_conv_name)
+            new_next_conv = prune_conv_in_channels(next_conv, indices.tolist())
+            setattr(parent, next_conv_name, new_next_conv)
+
+        # 6. 剪枝後重新獲取該層
+        target_layer_new = self.net_feature_maps
+        for part in layer_name.split('.'):
+            if part.isdigit():
+                target_layer_new = target_layer_new[int(part)]
+            else:
+                target_layer_new = getattr(target_layer_new, part)
+        self.logger.info(f"已剪枝層: {layer_name}，保留 {target_layer_new.out_channels}/{num_channels} 個通道（參數數量已減少）")
+        self.logger.info(f"剪枝後參數量 {sum(p.numel() for p in self.net_feature_maps.parameters())}")
         return self
+
 
     def multi_layer_pruning(self, layer_names, images, boxes, pruneratio=0.3, class_images=None):
         """
@@ -691,7 +709,8 @@ class LCPPruner(Os2dModel):
             pruneratio = self.pruneratio
             
         self.logger.info(f"開始模型剪枝，剪枝比例: {pruneratio}")
-
+        self.logger.info(f"剪枝前的模型參數量: {sum(p.numel() for p in self.net_feature_maps.parameters())}")
+        
         # 確定要使用的批次索引
         if batch_indices is None:
             total_batches = len(dataloader)
@@ -712,7 +731,7 @@ class LCPPruner(Os2dModel):
                 class_images = None
                 if len(batch) > 2:
                     class_images = batch[2]  # 獲取類別圖像
-                    self.logger.info(f"批次 {batch_idx} 類別圖像形狀: {class_images.shape}")
+                    # self.logger.info(f"批次 {batch_idx} 類別圖像形狀: {class_images.shape}")
                     
                     # 處理5D格式: [batch_size, num_classes, channels, height, width]
                     if class_images.ndim == 5:
@@ -779,4 +798,5 @@ class LCPPruner(Os2dModel):
                 continue
         
         self.logger.info(f"剪枝完成，保留比例: {1 - pruneratio}")
+        self.logger.info(f"剪枝後的模型參數量: {sum(p.numel() for p in self.net_feature_maps.parameters())}")
         return self
