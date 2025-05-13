@@ -430,7 +430,7 @@ def trainval_loop(dataloader_train, net, cfg, criterion, optimizer, dataloaders_
         # evaluate the initial model
         meters_eval = evaluate_model(dataloaders_eval, net, cfg, criterion)
         
-        net.prune_model(dataloader_train, prune_rate=0.3)
+        # net.prune_model(dataloader_train, prune_rate=0.3)
 
 
         if cfg.output.best_model.do_get_best_model:
